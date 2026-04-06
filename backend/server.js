@@ -2,143 +2,140 @@ const express = require("express");
 const http = require("http");
 const { Server } = require("socket.io");
 const cors = require("cors");
+const mongoose = require("mongoose");
 const path = require("path");
 require("dotenv").config();
 
-// ✅ NEW IMPORTS
-const passport = require("passport");
-const GoogleStrategy = require("passport-google-oauth20").Strategy;
-const GitHubStrategy = require("passport-github2").Strategy;
-const session = require("express-session");
-
 const app = express();
 
-console.log("=== STARTUP KEY CHECK ===");
-console.log("Google ID exists?", !!process.env.GOOGLE_CLIENT_ID);
-console.log("GitHub ID exists?", !!process.env.GITHUB_CLIENT_ID);
-console.log("=========================");
-
-// ✅ FIX CORS (Updated to your live Vercel URL)
+// ✅ MIDDLEWARE & CORS
+app.use(express.json());
 app.use(cors({
-  origin: "https://fork-yeah-three.vercel.app",
+  origin: ["https://fork-yeah-three.vercel.app", "http://localhost:5173", "http://localhost:5174"],
+  methods: ["GET", "POST", "PUT", "DELETE"],
   credentials: true
 }));
 
-// ✅ SESSION
-app.use(session({
-  secret: process.env.SESSION_SECRET || "super_secret_hackathon_fallback_key",
-  resave: false,
-  saveUninitialized: false
-}));
+// ====================================================================
+// ✅ MONGODB CONNECTION
+// ====================================================================
+const MONGO_URI = process.env.MONGO_URI || "mongodb://127.0.0.1:27017/livecollab";
+mongoose.connect(MONGO_URI)
+  .then(() => console.log("🟢 Successfully connected to MongoDB!"))
+  .catch((err) => console.error("🔴 MongoDB Connection Error:", err));
 
-// ✅ PASSPORT INITIALIZATION
-app.use(passport.initialize());
-app.use(passport.session());
+// Database Schemas
+const userSchema = new mongoose.Schema({
+  username: { type: String, required: true, unique: true }
+});
+const User = mongoose.model("User", userSchema);
 
-// ✅ GOOGLE STRATEGY
-passport.use(new GoogleStrategy({
-  clientID: process.env.GOOGLE_CLIENT_ID,
-  clientSecret: process.env.GOOGLE_CLIENT_SECRET,
-  callbackURL: "https://fork-yeah-backend.onrender.com/auth/google/callback"
-},
-  (accessToken, refreshToken, profile, done) => {
-    return done(null, profile);
-  }));
-
-// ✅ GITHUB STRATEGY
-passport.use(new GitHubStrategy({
-  clientID: process.env.GITHUB_CLIENT_ID,
-  clientSecret: process.env.GITHUB_CLIENT_SECRET,
-  callbackURL: "https://fork-yeah-backend.onrender.com/auth/github/callback"
-},
-  (accessToken, refreshToken, profile, done) => {
-    return done(null, profile);
-  }));
-
-passport.serializeUser((user, done) => done(null, user));
-passport.deserializeUser((user, done) => done(null, user));
-
+const roomSchema = new mongoose.Schema({
+  roomId: { type: String, required: true, unique: true },
+  elements: { type: Array, default: [] }
+});
+const Room = mongoose.model("Room", roomSchema);
 
 // ====================================================================
-// ✅ AUTH ROUTES (Redirecting back to Vercel upon success)
+// ✅ CUSTOM AUTH / LOGIN ROUTE
 // ====================================================================
 
-app.get("/auth/google",
-  passport.authenticate("google", { scope: ["profile", "email"] })
-);
+app.post("/api/login", async (req, res) => {
+  try {
+    const { username } = req.body;
+    if (!username) return res.status(400).json({ error: "Username is required" });
 
-app.get("/auth/google/callback",
-  passport.authenticate("google", {
-    successRedirect: "https://fork-yeah-three.vercel.app",
-    failureRedirect: "https://fork-yeah-three.vercel.app"
-  })
-);
-
-app.get("/auth/github",
-  passport.authenticate("github", { scope: ['user:email'] })
-);
-
-app.get("/auth/github/callback",
-  passport.authenticate("github", {
-    successRedirect: "https://fork-yeah-three.vercel.app",
-    failureRedirect: "https://fork-yeah-three.vercel.app"
-  })
-);
-
-app.get("/auth/logout", (req, res, next) => {
-  req.logout((err) => {
-    if (err) { return next(err); }
-    res.redirect("https://fork-yeah-three.vercel.app");
-  });
+    // Check if user exists, if not, create them!
+    let user = await User.findOne({ username });
+    if (!user) {
+      user = await User.create({ username });
+    }
+    
+    // Send the user back to the frontend
+    res.json({ displayName: user.username, ...user.toObject() });
+  } catch (error) {
+    console.error("Login error:", error);
+    res.status(500).json({ error: "Server error during login" });
+  }
 });
 
-// ✅ USER ROUTE (For the frontend to check if someone is logged in)
+// Fallback user route
 app.get("/user", (req, res) => {
-  res.send(req.user || null);
+  res.json(null);
 });
 
+// ====================================================================
+// ✅ ROOM CREATION ROUTE
+// ====================================================================
+
+app.post("/room", async (req, res) => {
+  try {
+    // Generate a new roomId if not provided
+    const roomId = req.body.roomId || 'room-' + Math.random().toString(36).substring(2, 10);
+    
+    let roomDoc = await Room.findOne({ roomId });
+    if (!roomDoc) {
+      roomDoc = await Room.create({ roomId, elements: [] });
+    }
+    
+    res.json({ roomId: roomDoc.roomId });
+  } catch (err) {
+    console.error("Create Room Error:", err);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
 
 // ====================================================================
-// ================= SOCKET.IO MULTIPLAYER LOGIC ======================
+// ✅ PERSISTENT SOCKET.IO LOGIC
 // ====================================================================
 
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: {
-    origin: "https://fork-yeah-three.vercel.app",
+    origin: ["https://fork-yeah-three.vercel.app", "http://localhost:5173", "http://localhost:5174"],
     methods: ["GET", "POST"],
     credentials: true
   }
 });
 
+// We keep a fast in-memory copy, but save it to MongoDB in the background!
 const roomsData = {};
 
 io.on("connection", (socket) => {
   console.log(`User connected: ${socket.id}`);
 
-  socket.on("join-room", ({ roomId, username }) => {
+  socket.on("join-room", async ({ roomId, username }) => {
     socket.join(roomId);
     socket.roomId = roomId;
     socket.username = username;
 
+    // 1. If we don't have the room in memory, check the Database!
     if (!roomsData[roomId]) {
-      roomsData[roomId] = { objects: {}, chats: [], users: {} };
+      let dbRoom = await Room.findOne({ roomId });
+      
+      // 2. If it doesn't exist in the DB either, create a blank one.
+      if (!dbRoom) {
+        dbRoom = await Room.create({ roomId, elements: [] });
+      }
+
+      // 3. Load DB data into our fast memory cache
+      const objectsMap = {};
+      dbRoom.elements.forEach(el => objectsMap[el.id] = el);
+      roomsData[roomId] = { objects: objectsMap, chats: [], users: {} };
     }
 
     roomsData[roomId].users[socket.id] = {
       username: username || "Anonymous"
     };
 
+    // Send the loaded state to the user who just joined
     socket.emit("load-state", {
       objects: Object.values(roomsData[roomId].objects),
       chats: roomsData[roomId].chats,
       users: roomsData[roomId].users
     });
 
-    socket.to(roomId).emit("user-joined", {
-      socketId: socket.id,
-      username
-    });
+    socket.to(roomId).emit("user-joined", { socketId: socket.id, username });
   });
 
   socket.on("request-board-state", (roomId) => {
@@ -154,18 +151,29 @@ io.on("connection", (socket) => {
   socket.on("draw-update", ({ roomId, element }) => {
     if (roomsData[roomId]) {
       roomsData[roomId].objects[element.id] = element;
+      socket.to(roomId).emit("receive-update", element);
+      
+      // Save backup to MongoDB in the background
+      Room.updateOne({ roomId }, { elements: Object.values(roomsData[roomId].objects) }).exec();
     }
-    socket.to(roomId).emit("receive-update", element);
   });
 
   socket.on("object-remove", ({ roomId, id }) => {
-    if (roomsData[roomId]) delete roomsData[roomId].objects[id];
-    socket.to(roomId).emit("object-remove", id);
+    if (roomsData[roomId]) {
+      delete roomsData[roomId].objects[id];
+      socket.to(roomId).emit("object-remove", id);
+      
+      Room.updateOne({ roomId }, { elements: Object.values(roomsData[roomId].objects) }).exec();
+    }
   });
 
   socket.on("clear", (roomId) => {
-    if (roomsData[roomId]) roomsData[roomId].objects = {};
-    socket.to(roomId).emit("clear");
+    if (roomsData[roomId]) {
+      roomsData[roomId].objects = {};
+      socket.to(roomId).emit("clear");
+      
+      Room.updateOne({ roomId }, { elements: [] }).exec();
+    }
   });
 
   socket.on("state-replace", ({ roomId, elements }) => {
@@ -175,6 +183,8 @@ io.on("connection", (socket) => {
         roomsData[roomId].objects[el.id] = el;
       });
       socket.to(roomId).emit("state-replace", elements);
+      
+      Room.updateOne({ roomId }, { elements: elements }).exec();
     }
   });
 
@@ -202,20 +212,12 @@ io.on("connection", (socket) => {
   socket.on("disconnect", () => {
     console.log(`User disconnected: ${socket.id}`);
     const roomId = socket.roomId;
-
     if (roomId && roomsData[roomId]) {
       delete roomsData[roomId].users[socket.id];
       socket.to(roomId).emit("user-left", socket.id);
     }
   });
 });
-app.get("/debug-env", (req, res) => {
-  res.send({
-    googleId: process.env.GOOGLE_CLIENT_ID || "MISSING",
-    githubId: process.env.GITHUB_CLIENT_ID || "MISSING"
-  });
-});
-
 
 const PORT = process.env.PORT || 3001;
 server.listen(PORT, () => {
