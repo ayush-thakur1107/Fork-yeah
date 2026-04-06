@@ -13,6 +13,11 @@ const session = require("express-session");
 
 const app = express();
 
+console.log("=== STARTUP KEY CHECK ===");
+console.log("Google ID exists?", !!process.env.GOOGLE_CLIENT_ID);
+console.log("GitHub ID exists?", !!process.env.GITHUB_CLIENT_ID);
+console.log("=========================");
+
 // ✅ FIX CORS (Updated to your live Vercel URL)
 app.use(cors({
   origin: "https://fork-yeah-three.vercel.app",
