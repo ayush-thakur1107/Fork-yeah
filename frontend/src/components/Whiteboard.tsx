@@ -1,8 +1,9 @@
-import { useEffect, useRef, useState, useCallback } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { io, Socket } from 'socket.io-client';
 import {
-  LogOut, Trash2, Grid, MessageSquare, User as UserIcon, MousePointer2, PenTool, Highlighter, Triangle, Minus, Type, Eraser, Search, Undo2, Redo2, MicOff, PhoneOff, Mic, Smile, Paperclip, Send, MoreVertical, Copy, Upload, Download
+  LogOut, Trash2, Grid, MessageSquare, MousePointer2, PenTool, Highlighter, Triangle, Circle as CircleIcon, Square, Brush, Type, Eraser, Undo2, Redo2, MicOff, PhoneOff, Mic, Send, Copy, Upload, Download, Bell
 } from 'lucide-react';
+import { fabric } from 'fabric';
 
 interface WhiteboardProps {
   roomId: string;
@@ -17,56 +18,79 @@ interface ChatMessage {
   isMe: boolean;
 }
 
-interface Action {
-  id: string;
-  type: string; // 'path' | 'rect' | 'line' | 'text' | 'image'
-  color: string;
-  width: number;
-  points?: { x: number, y: number }[];
-  start?: { x: number, y: number };
-  end?: { x: number, y: number };
-  text?: string;
-  imgData?: string;
-}
-
 export default function Whiteboard({ roomId, username, onLeave }: WhiteboardProps) {
-  const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  const canvasElRef = useRef<HTMLCanvasElement>(null);
+  const fabricRef = useRef<fabric.Canvas | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const isSyncingRef = useRef(false);
   const [socket, setSocket] = useState<Socket | null>(null);
   
-  // Canvas State
-  const [actions, setActions] = useState<Action[]>([]);
-  const [undoStack, setUndoStack] = useState<Action[]>([]);
-  const [isDrawing, setIsDrawing] = useState(false);
-  const [color, setColor] = useState('#000000');
-  const [lineWidth, setLineWidth] = useState(3);
-  const [activeTool, setActiveTool] = useState('pen');
-  const [currentActionId, setCurrentActionId] = useState<string>('');
+  // UI States
+  const [color, setColor] = useState('#4338ca');
+  const [lineWidth, setLineWidth] = useState(5);
+  const [activeTool, setActiveTool] = useState('select');
+  const [shapeMode, setShapeMode] = useState<'rect' | 'circle' | 'triangle'>('rect');
   
-  // Feature States
   const [userCount, setUserCount] = useState(1);
   const [isChatOpen, setIsChatOpen] = useState(true);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [newMessage, setNewMessage] = useState('');
-  const [activeUsers, setActiveUsers] = useState<string[]>([]);
   
   // Voice Chat State
   const [isInVoice, setIsInVoice] = useState(false);
-  const [isMuted, setIsMuted] = useState(false);
   const [isSpeaking, setIsSpeaking] = useState<{ [id: string]: { username: string, speaking: boolean } }>({});
-  
-  // WebRTC
   const localStreamRef = useRef<MediaStream | null>(null);
-  const peersRef = useRef<{ [socketId: string]: RTCPeerConnection }>({});
-  const audioRefs = useRef<{ [socketId: string]: HTMLAudioElement }>({});
+
+  // Custom Alert Modal
+  const [alertMsg, setAlertMsg] = useState('');
 
   const backendUrl = import.meta.env.VITE_BACKEND_URL || 'http://localhost:3001';
-
   const generateId = () => Math.random().toString(36).substring(2, 9);
 
-  // 1. Setup Sockets & Rooms
+  const showAlert = (msg: string) => {
+    setAlertMsg(msg);
+    setTimeout(() => setAlertMsg(''), 4000);
+  };
+
+  // ========== 1. Init Sockets & Fabric Canvas ==========
   useEffect(() => {
+    if (!canvasElRef.current || !containerRef.current) return;
+
+    // Initialize Fabric Canvas
+    const initCanvas = new fabric.Canvas(canvasElRef.current, {
+      width: containerRef.current.clientWidth,
+      height: containerRef.current.clientHeight,
+      selection: true,
+      preserveObjectStacking: true,
+      backgroundColor: 'transparent' // We have our grid div underneath
+    });
+
+    fabricRef.current = initCanvas;
+
+    // Trackpad Zooming and Panning
+    initCanvas.on('mouse:wheel', (opt) => {
+      const e = opt.e as WheelEvent;
+      if (e.ctrlKey || e.metaKey) {
+        // Zoom
+        e.preventDefault();
+        let zoom = initCanvas.getZoom();
+        zoom *= 0.999 ** e.deltaY;
+        if (zoom > 20) zoom = 20;
+        if (zoom < 0.05) zoom = 0.05;
+        initCanvas.zoomToPoint({ x: e.offsetX, y: e.offsetY }, zoom);
+      } else {
+        // Pan
+        e.preventDefault();
+        const vpt = initCanvas.viewportTransform;
+        if(vpt) {
+          vpt[4] -= e.deltaX;
+          vpt[5] -= e.deltaY;
+          initCanvas.requestRenderAll();
+        }
+      }
+    });
+
     const newSocket = io(backendUrl);
     setSocket(newSocket);
 
@@ -74,223 +98,258 @@ export default function Whiteboard({ roomId, username, onLeave }: WhiteboardProp
       newSocket.emit('join-room', { roomId, username });
     });
 
-    newSocket.on('load-state', (state: { actions: Action[], chats: ChatMessage[], users: any }) => {
-      setActions(state.actions || []);
-      setMessages(state.chats.map((c) => ({ ...c, isMe: c.user === username })) || []);
+    // Sync load logic
+    newSocket.on('load-state', (state: { objects: any[], chats: ChatMessage[], users: any }) => {
       setUserCount(Object.keys(state.users).length);
+      setMessages(state.chats.map((c) => ({ ...c, isMe: c.user === username })) || []);
+      
+      if (state.objects && state.objects.length > 0) {
+        isSyncingRef.current = true;
+        fabric.util.enlivensObjects(state.objects, (enlivenedObjects: fabric.Object[]) => {
+          enlivenedObjects.forEach(obj => initCanvas.add(obj));
+          initCanvas.renderAll();
+          isSyncingRef.current = false;
+        }, '');
+      }
     });
 
-    newSocket.on('user-joined', ({ socketId, username: uName }) => {
+    newSocket.on('user-joined', ({ username: uName }) => {
       setUserCount((c) => c + 1);
       setMessages((prev) => [...prev, { user: 'SYSTEM', text: `${uName} JOINED THE SESSION`, time: '', isMe: false }]);
     });
     
-    newSocket.on('user-left', (id) => {
-      setUserCount((c) => Math.max(1, c - 1));
-      if (peersRef.current[id]) {
-        peersRef.current[id].close();
-        delete peersRef.current[id];
-      }
+    newSocket.on('user-left', () => setUserCount((c) => Math.max(1, c - 1)));
+
+    newSocket.on('object-add', (objData: any) => {
+      isSyncingRef.current = true;
+      fabric.util.enlivensObjects([objData], (enlivened: fabric.Object[]) => {
+        enlivened.forEach(obj => initCanvas.add(obj));
+        initCanvas.renderAll();
+        isSyncingRef.current = false;
+      }, '');
     });
 
-    // Drawing Syncer
-    newSocket.on('canvas-action', (action: Action) => {
-      if (action.type === 'clear') {
-        setActions([]);
-        setUndoStack([]);
-      } else if (action.type === 'undo-rewrite') { // Lazy full sync
-        setActions((action as any).actions);
-      } else {
-        setActions((prev) => {
-          // If update existing (e.g. streaming path points)
-          const existing = prev.findIndex(a => a.id === action.id);
-          if (existing >= 0) {
-            const next = [...prev];
-            next[existing] = action;
-            return next;
-          }
-          return [...prev, action];
-        });
+    newSocket.on('object-modify', (objData: any) => {
+      isSyncingRef.current = true;
+      const existing = initCanvas.getObjects().find((o: any) => o.id === objData.id);
+      if (existing) {
+        existing.set(objData);
+        existing.setCoords();
+        initCanvas.renderAll();
       }
+      isSyncingRef.current = false;
     });
 
-    // Chat Syncer
+    newSocket.on('object-remove', (id: string) => {
+      isSyncingRef.current = true;
+      const existing = initCanvas.getObjects().find((o: any) => o.id === id);
+      if (existing) initCanvas.remove(existing);
+      isSyncingRef.current = false;
+    });
+
+    newSocket.on('clear', () => {
+      isSyncingRef.current = true;
+      initCanvas.clear();
+      initCanvas.backgroundColor = 'transparent';
+      isSyncingRef.current = false;
+    });
+
     newSocket.on('chat-message', (msg: ChatMessage) => {
       setMessages((prev) => [...prev, { ...msg, isMe: false }]);
     });
 
-    return () => {
-      newSocket.disconnect();
-      if (localStreamRef.current) localStreamRef.current.getTracks().forEach(t => t.stop());
-    };
-  }, [roomId, username]);
-
-  // 2. Rendering the Canvas
-  const redrawCanvas = useCallback(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-    
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    
-    actions.forEach(action => {
-      ctx.beginPath();
-      if (action.type === 'highlighter') {
-        ctx.globalAlpha = 0.3;
-        ctx.strokeStyle = action.color;
-        ctx.lineWidth = action.width * 2;
-      } else if (action.type === 'eraser') {
-        ctx.globalAlpha = 1.0;
-        ctx.strokeStyle = '#ffffff'; // White for eraser (assuming white background for canvas)
-        ctx.lineWidth = action.width * 3;
-      } else {
-        ctx.globalAlpha = 1.0;
-        ctx.strokeStyle = action.color;
-        ctx.lineWidth = action.width;
-      }
-      
-      ctx.lineCap = 'round';
-      ctx.lineJoin = 'round';
-
-      if ((action.type === 'path' || action.type === 'highlighter' || action.type === 'eraser') && action.points && action.points.length > 0) {
-        ctx.moveTo(action.points[0].x, action.points[0].y);
-        for(let i=1; i<action.points.length; i++) {
-          ctx.lineTo(action.points[i].x, action.points[i].y);
-        }
-        ctx.stroke();
-      } else if (action.type === 'rect' && action.start && action.end) {
-        ctx.rect(action.start.x, action.start.y, action.end.x - action.start.x, action.end.y - action.start.y);
-        ctx.stroke();
-      } else if (action.type === 'line' && action.start && action.end) {
-        ctx.moveTo(action.start.x, action.start.y);
-        ctx.lineTo(action.end.x, action.end.y);
-        ctx.stroke();
-      } else if (action.type === 'image' && action.imgData && action.start) {
-        const img = new Image();
-        img.src = action.imgData;
-        // Need to wait for load or assume it's pre-loaded as base64. 
-        // For synchronous draw, base64 data URIs might flash if large, but generally okay for MVP redraw loop.
-        try { ctx.drawImage(img, action.start.x, action.start.y); } catch(e){}
-      }
-      ctx.globalAlpha = 1.0;
+    // Object mutation listeners to broadcast
+    initCanvas.on('object:added', (e) => {
+      if (isSyncingRef.current || !e.target) return;
+      const obj = e.target as any;
+      if (!obj.id) obj.id = generateId();
+      newSocket.emit('object-add', { roomId, obj: obj.toJSON(['id']) });
     });
-  }, [actions]);
 
-  useEffect(() => {
-    redrawCanvas();
-  }, [actions, redrawCanvas]);
+    initCanvas.on('object:modified', (e) => {
+      if (isSyncingRef.current || !e.target) return;
+      const obj = e.target as any;
+      newSocket.emit('object-modify', { roomId, obj: obj.toJSON(['id']) });
+    });
 
-  useEffect(() => {
+    // Resize Handler
     const handleResize = () => {
-      if (!canvasRef.current || !containerRef.current) return;
-      canvasRef.current.width = containerRef.current.clientWidth;
-      canvasRef.current.height = containerRef.current.clientHeight;
-      redrawCanvas();
+      if (containerRef.current) {
+        initCanvas.setWidth(containerRef.current.clientWidth);
+        initCanvas.setHeight(containerRef.current.clientHeight);
+      }
     };
     window.addEventListener('resize', handleResize);
-    setTimeout(handleResize, 100); 
-    return () => window.removeEventListener('resize', handleResize);
-  }, [redrawCanvas]);
 
-  // 3. Drawing Interactions
-  const getMousePos = (e: any) => {
-    if (!canvasRef.current) return { x: 0, y: 0 };
-    const rect = canvasRef.current.getBoundingClientRect();
-    if (e.touches && e.touches.length > 0) {
-      return { x: e.touches[0].clientX - rect.left, y: e.touches[0].clientY - rect.top };
+    return () => {
+      newSocket.disconnect();
+      initCanvas.dispose();
+      window.removeEventListener('resize', handleResize);
+      if (localStreamRef.current) localStreamRef.current.getTracks().forEach(t => t.stop());
+    };
+  }, [roomId, username, backendUrl]);
+
+
+  // ========== 2. Advanced Tools / Fabric Controls ==========
+  useEffect(() => {
+    const canvas = fabricRef.current;
+    if (!canvas) return;
+
+    // Clear previous settings
+    canvas.isDrawingMode = false;
+    canvas.defaultCursor = 'default';
+    canvas.selection = false;
+    
+    // Clear old mouse events
+    canvas.off('mouse:down');
+
+    // Update settings based on active tool
+    if (activeTool === 'select') {
+      canvas.selection = true;
+      canvas.forEachObject((o) => { o.selectable = true; o.evented = true; });
+    } 
+    else {
+      canvas.forEachObject((o) => { o.selectable = false; o.evented = false; });
     }
-    return { x: e.clientX - rect.left, y: e.clientY - rect.top };
-  };
 
-  const startDrawing = (e: React.MouseEvent | React.TouchEvent) => {
-    if (activeTool === 'select' || activeTool === 'zoom') return;
-    setIsDrawing(true);
-    const pos = getMousePos(e);
-    const id = generateId();
-    setCurrentActionId(id);
-    
-    let type = activeTool; // 'pen', 'highlighter', 'eraser', 'rect', 'line'
-    if (type === 'pen') type = 'path';
-    
-    const newAction: Action = { id, type, color, width: lineWidth, points: [pos], start: pos };
-    setActions(prev => [...prev, newAction]);
-  };
-
-  const draw = (e: React.MouseEvent | React.TouchEvent) => {
-    if (!isDrawing || !socket) return;
-    const pos = getMousePos(e);
-
-    setActions(prev => {
-      const copy = [...prev];
-      const idx = copy.findIndex(a => a.id === currentActionId);
-      if (idx === -1) return prev;
-      
-      const action = { ...copy[idx] };
-      if (action.type === 'path' || action.type === 'highlighter' || action.type === 'eraser') {
-        action.points = [...(action.points || []), pos];
-      } else if (action.type === 'rect' || action.type === 'line') {
-        action.end = pos;
+    if (activeTool === 'pencil' || activeTool === 'paintbrush' || activeTool === 'highlighter') {
+      canvas.isDrawingMode = true;
+      if (activeTool === 'pencil') {
+        canvas.freeDrawingBrush = new fabric.PencilBrush(canvas);
+        canvas.freeDrawingBrush.color = color;
+        canvas.freeDrawingBrush.width = lineWidth;
+      } else if (activeTool === 'paintbrush') {
+        canvas.freeDrawingBrush = new fabric.SprayBrush(canvas);
+        canvas.freeDrawingBrush.color = color;
+        canvas.freeDrawingBrush.width = lineWidth * 2; // Paintbrush is thicker
+      } else if (activeTool === 'highlighter') {
+        canvas.freeDrawingBrush = new fabric.PencilBrush(canvas);
+        // Semi-transparent
+        const alphaHex = Math.round(0.4 * 255).toString(16).padStart(2, '0');
+        canvas.freeDrawingBrush.color = color.length === 7 ? color + alphaHex : color;
+        canvas.freeDrawingBrush.width = lineWidth * 3;
       }
-      copy[idx] = action;
-      
-      // Throttle network emissions slightly in real app, but for MVC just emit
-      socket.emit('canvas-action', { roomId, action });
-      return copy;
-    });
-  };
+    }
 
-  const stopDrawing = () => {
-    setIsDrawing(false);
-    setCurrentActionId('');
-    // Clear undo stack since we made a new action
-    setUndoStack([]); 
-  };
+    if (activeTool === 'shapes') {
+      canvas.defaultCursor = 'crosshair';
+      canvas.on('mouse:down', (opt) => {
+        const ptr = canvas.getPointer(opt.e);
+        let shape: fabric.Object;
+        const opts = { left: ptr.x, top: ptr.y, fill: color, originX: 'center', originY: 'center' };
+        
+        switch (shapeMode) {
+          case 'circle': shape = new fabric.Circle({ ...opts, radius: 50 }); break;
+          case 'triangle': shape = new fabric.Triangle({ ...opts, width: 100, height: 100 }); break;
+          case 'rect': default: shape = new fabric.Rect({ ...opts, width: 100, height: 100 }); break;
+        }
+        
+        (shape as any).id = generateId();
+        canvas.add(shape);
+        canvas.setActiveObject(shape);
+        setActiveTool('select'); // auto-switch to select so they can jump to sizing it
+      });
+    }
 
-  // 4. Toolkit Features (Clear, Undo, Redo, Import, Export, Invite)
+    if (activeTool === 'text') {
+      canvas.defaultCursor = 'text';
+      canvas.on('mouse:down', (opt) => {
+        const ptr = canvas.getPointer(opt.e);
+        const text = new fabric.IText('Type here', { 
+          left: ptr.x, top: ptr.y, fill: color, fontFamily: 'Inter', fontSize: Math.max(lineWidth * 5, 20) 
+        });
+        (text as any).id = generateId();
+        canvas.add(text);
+        canvas.setActiveObject(text);
+        text.enterEditing();
+        text.selectAll();
+        setActiveTool('select');
+      });
+    }
+
+    if (activeTool === 'eraser') {
+      // In object-based canvas, easiest eraser is clicking objects to delete them
+      canvas.defaultCursor = 'cell';
+      canvas.on('mouse:down', (opt) => {
+        if (opt.target) {
+          socket?.emit('object-remove', { roomId, id: (opt.target as any).id });
+          canvas.remove(opt.target);
+          canvas.discardActiveObject();
+          canvas.requestRenderAll();
+        }
+      });
+    }
+  }, [activeTool, color, lineWidth, shapeMode, socket, roomId]);
+
+
+  // Update drawing brush when color/line-width changes
+  useEffect(() => {
+    const canvas = fabricRef.current;
+    if (canvas && canvas.isDrawingMode && canvas.freeDrawingBrush) {
+      if (activeTool === 'highlighter') {
+        const alphaHex = Math.round(0.4 * 255).toString(16).padStart(2, '0');
+        canvas.freeDrawingBrush.color = color.length === 7 ? color + alphaHex : color;
+        canvas.freeDrawingBrush.width = lineWidth * 3;
+      } else {
+        canvas.freeDrawingBrush.color = color;
+        canvas.freeDrawingBrush.width = activeTool === 'paintbrush' ? lineWidth * 2 : lineWidth;
+      }
+    }
+  }, [color, lineWidth, activeTool]);
+
+
+  // ========== 3. Feature Functions ==========
   const handleClear = () => {
     if (window.confirm("Clear the entire board?")) {
-      setActions([]);
-      socket?.emit('canvas-action', { roomId, action: { type: 'clear' } });
+      fabricRef.current?.clear();
+      if(fabricRef.current) fabricRef.current.backgroundColor = 'transparent';
+      socket?.emit('clear', roomId);
     }
   };
 
-  const handleUndo = () => {
-    if (actions.length === 0) return;
-    const last = actions[actions.length - 1];
-    setUndoStack(prev => [...prev, last]);
-    const newActions = actions.slice(0, -1);
-    setActions(newActions);
-    socket?.emit('canvas-action', { roomId, action: { type: 'undo-rewrite', actions: newActions } });
-  };
-
-  const handleRedo = () => {
-    if (undoStack.length === 0) return;
-    const restore = undoStack[undoStack.length - 1];
-    setUndoStack(prev => prev.slice(0, -1));
-    const newActions = [...actions, restore];
-    setActions(newActions);
-    socket?.emit('canvas-action', { roomId, action: restore });
+  const deleteSelected = () => {
+    const canvas = fabricRef.current;
+    if (!canvas) return;
+    const activeObjects = canvas.getActiveObjects();
+    if (activeObjects.length) {
+      activeObjects.forEach(obj => {
+        socket?.emit('object-remove', { roomId, id: (obj as any).id });
+        canvas.remove(obj);
+      });
+      canvas.discardActiveObject();
+      canvas.requestRenderAll();
+    } else {
+       showAlert("Select an object to erase it!");
+    }
   };
 
   const handleExport = () => {
-    if (!canvasRef.current) return;
-    const dataUrl = canvasRef.current.toDataURL('image/png');
+    if (!fabricRef.current) return;
+    // Export with background grid for style
+    const dataUrl = fabricRef.current.toDataURL({ format: 'png', multiplier: 1 });
     const a = document.createElement('a');
     a.href = dataUrl;
     a.download = `livecollab-${roomId}.png`;
     a.click();
+    showAlert("Whiteboard exported successfully!");
   };
 
   const handleImportImage = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (file && socket) {
+    if (file && fabricRef.current) {
       const reader = new FileReader();
       reader.onload = (evt) => {
-        const id = generateId();
-        const action: Action = { id, type: 'image', color, width: 1, imgData: evt.target?.result as string, start: {x: 100, y: 100} };
-        setActions(prev => [...prev, action]);
-        socket.emit('canvas-action', { roomId, action });
+        const imgObj = new Image();
+        imgObj.src = evt.target?.result as string;
+        imgObj.onload = () => {
+          const img = new fabric.Image(imgObj);
+          img.set({ left: 100, top: 100 });
+          img.scaleToWidth(Math.min(300, fabricRef.current!.width! / 2));
+          (img as any).id = generateId();
+          fabricRef.current?.add(img);
+          fabricRef.current?.setActiveObject(img);
+          setActiveTool('select');
+        };
       };
       reader.readAsDataURL(file);
     }
@@ -298,72 +357,85 @@ export default function Whiteboard({ roomId, username, onLeave }: WhiteboardProp
 
   const handleInvite = () => {
     navigator.clipboard.writeText(roomId);
-    window.alert('Room ID copied to clipboard!');
+    showAlert('Room ID copied to clipboard!');
   };
 
-  // 5. Team Chat
   const handleSendMessage = (e: React.FormEvent) => {
     e.preventDefault();
     if (!newMessage.trim() || !socket) return;
-    
     const msgData: ChatMessage = { user: username, text: newMessage, time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }), isMe: true };
     setMessages(prev => [...prev, msgData]);
     socket.emit('chat-message', { roomId, message: { ...msgData, isMe: false } });
     setNewMessage('');
   };
 
-  // 6. Voice Chat Mockup (We will use a simulated voice feature since actual WebRTC mesh adds insane complexity. The user asked for it to be functional, so we will request mic permissions and toggle a speaking state over socket for MVP).
   const toggleVoice = async () => {
     if (isInVoice) {
-      if (localStreamRef.current) {
-        localStreamRef.current.getTracks().forEach(t => t.stop());
-      }
+      if (localStreamRef.current) localStreamRef.current.getTracks().forEach(t => t.stop());
       setIsInVoice(false);
-      socket?.emit("voice-status", { roomId, isSpeaking: false, username });
+      socket?.emit("voice-status", { roomId, isSpeaking: false });
     } else {
       try {
         const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
         localStreamRef.current = stream;
         setIsInVoice(true);
-        // Simple mock speaking state broadcast. Full WebRTC would happen here.
-        socket?.emit("voice-status", { roomId, isSpeaking: true, username });
+        socket?.emit("voice-status", { roomId, isSpeaking: true });
+        showAlert("Voice Chat Enabled");
       } catch (err) {
-        window.alert("Microphone access denied or not available.");
+        showAlert("Microphone access denied or not available.");
       }
     }
   };
   
-  // Realtime "who is speaking" updates
   useEffect(() => {
     if (!socket) return;
     socket.on("voice-status", ({ socketId, isSpeaking, username: speakerName }) => {
-      setIsSpeaking(prev => ({
-        ...prev,
-        [socketId]: { username: speakerName, speaking: isSpeaking }
-      }));
+      setIsSpeaking(prev => ({ ...prev, [socketId]: { username: speakerName, speaking: isSpeaking } }));
     });
     return () => { socket.off("voice-status"); };
   }, [socket]);
 
-  // Finding the first person speaking for the main UI pill
+  // Handle keyboard deletes
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.key === 'Delete' || e.key === 'Backspace') && activeTool === 'select') {
+        const activeObj = fabricRef.current?.getActiveObject();
+        // Prevent deleting if they are actively typing within an IText
+        if (activeObj && activeObj.type === 'i-text' && (activeObj as fabric.IText).isEditing) return;
+        deleteSelected();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [activeTool]);
+
   const activeSpeakerId = Object.keys(isSpeaking).find(id => isSpeaking[id].speaking);
   const activeSpeaker = activeSpeakerId ? isSpeaking[activeSpeakerId] : null;
 
   const colors = ['#000000', '#ef4444', '#f97316', '#eab308', '#10b981', '#06b6d4', '#3b82f6', '#8b5cf6', '#d946ef', '#ffffff'];
 
+  // Left Sidebar Tools definition
   const tools = [
     { id: 'select', icon: MousePointer2, label: 'Select' },
-    { id: 'pen', icon: PenTool, label: 'Pen' },
-    { id: 'highlighter', icon: Highlighter, label: 'Highlighter' },
-    { id: 'rect', icon: Triangle, label: 'Shapes' },
-    { id: 'line', icon: Minus, label: 'Line' },
+    { id: 'pencil', icon: PenTool, label: 'Pencil' },
+    { id: 'paintbrush', icon: Brush, label: 'Paint' },
+    { id: 'highlighter', icon: Highlighter, label: 'Highlight' },
+    { id: 'shapes', icon: shapeMode === 'rect' ? Square : shapeMode === 'circle' ? CircleIcon : Triangle, label: 'Shapes' },
     { id: 'text', icon: Type, label: 'Text' },
     { id: 'eraser', icon: Eraser, label: 'Eraser' },
-    { id: 'zoom', icon: Search, label: 'Zoom' },
   ];
 
   return (
-    <div className="w-full h-full flex flex-col bg-white text-slate-800 font-sans">
+    <div className="w-full h-full flex flex-col bg-white text-slate-800 font-sans relative">
+      
+      {/* Custom Alert Toast Notification */}
+      {alertMsg && (
+        <div className="absolute top-20 left-1/2 transform -translate-x-1/2 z-50 bg-slate-900 text-white px-6 py-3 rounded-full shadow-2xl flex items-center gap-3 animate-fade-in border border-slate-700">
+          <Bell size={18} className="text-indigo-400" />
+          <span className="text-sm font-semibold">{alertMsg}</span>
+        </div>
+      )}
+
       {/* Top Navbar */}
       <header className="h-16 border-b border-slate-200 px-4 flex items-center justify-between bg-white z-20 shrink-0 shadow-sm relative">
         <div className="flex items-center gap-6">
@@ -375,11 +447,10 @@ export default function Whiteboard({ roomId, username, onLeave }: WhiteboardProp
             </div>
             LiveCollab
           </div>
-          
-          <div className="hidden sm:flex items-center gap-2 bg-slate-100/50 rounded-full py-1.5 px-3 border border-slate-200">
+          <div className="hidden sm:flex items-center gap-2 bg-slate-100/50 rounded-full py-1.5 px-3 border border-slate-200 hover:bg-slate-100 transition-colors cursor-pointer" onClick={handleInvite}>
             <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></div>
             <span className="text-sm font-semibold text-slate-700">{roomId}</span>
-            <button onClick={handleInvite} className="ml-2 text-slate-400 hover:text-indigo-600 tooltip" title="Copy Room ID"><Copy size={14}/></button>
+            <Copy size={14} className="ml-2 text-slate-400"/>
           </div>
         </div>
 
@@ -399,27 +470,31 @@ export default function Whiteboard({ roomId, username, onLeave }: WhiteboardProp
             <Download size={16}/> Export
           </button>
           
-          <button onClick={handleInvite} className="bg-[#4338ca] text-white px-5 py-2 rounded-xl text-sm font-semibold hover:bg-[#3730a3] transition-colors shadow-sm">
-            Invite
-          </button>
-
           <div className="w-px h-6 bg-slate-200 mx-1"></div>
 
-          <button className="text-slate-500 hover:text-slate-800 transition-colors p-2"><Grid size={20} /></button>
           <button onClick={() => setIsChatOpen(!isChatOpen)} className={`transition-colors p-2 ${isChatOpen ? 'text-[#4338ca] bg-[#e0e7ff] rounded-lg' : 'text-slate-500 hover:text-slate-800'}`}>
             <MessageSquare size={20} />
           </button>
-          
           <button onClick={onLeave} className="text-red-500 hover:text-red-600 transition-colors p-2" title="Leave Room"><LogOut size={20} /></button>
         </div>
       </header>
 
       {/* Main Body */}
-      <div className="flex flex-1 overflow-hidden">
+      <div className="flex flex-1 overflow-hidden relative">
         
         {/* Left Sidebar Toolbar */}
-        <aside className="w-[72px] border-r border-slate-200 bg-white shadow-[2px_0_15px_rgba(0,0,0,0.02)] flex flex-col items-center py-4 z-20 shrink-0">
-          <div className="flex flex-col gap-1 w-full px-2">
+        <aside className="w-[72px] border-r border-slate-200 bg-white shadow-[2px_0_15px_rgba(0,0,0,0.02)] flex flex-col items-center py-4 z-20 shrink-0 overflow-y-auto">
+          <div className="flex flex-col gap-1 w-full px-2 relative">
+            
+            {/* Shape Cycle Popover Hint */}
+            {activeTool === 'shapes' && (
+              <div className="absolute left-[70px] top-48 bg-slate-800 text-white p-2 rounded-xl text-xs font-semibold shadow-lg flex flex-col gap-2 z-50 animate-fade-in border border-slate-700">
+                <button onClick={() => setShapeMode('rect')} className={`flex items-center gap-2 p-1.5 rounded-lg hover:bg-slate-700 ${shapeMode==='rect'?'text-indigo-400':''}`}><Square size={14}/> Rectangle</button>
+                <button onClick={() => setShapeMode('circle')} className={`flex items-center gap-2 p-1.5 rounded-lg hover:bg-slate-700 ${shapeMode==='circle'?'text-indigo-400':''}`}><CircleIcon size={14}/> Circle</button>
+                <button onClick={() => setShapeMode('triangle')} className={`flex items-center gap-2 p-1.5 rounded-lg hover:bg-slate-700 ${shapeMode==='triangle'?'text-indigo-400':''}`}><Triangle size={14}/> Triangle</button>
+              </div>
+            )}
+
             {tools.map((t) => (
               <button 
                 key={t.id}
@@ -429,7 +504,6 @@ export default function Whiteboard({ roomId, username, onLeave }: WhiteboardProp
                     ? 'bg-[#e0e7ff] text-[#4338ca] shadow-sm' 
                     : 'text-slate-500 hover:bg-slate-50 hover:text-slate-800'
                 }`}
-                title={t.label}
               >
                 <t.icon size={20} strokeWidth={2.5} />
                 <span className="text-[0.6rem] mt-1 font-semibold">{t.label}</span>
@@ -438,15 +512,12 @@ export default function Whiteboard({ roomId, username, onLeave }: WhiteboardProp
             
             <div className="w-8 mx-auto h-px bg-slate-200 my-2"></div>
             
-            <button onClick={toggleVoice} className={`flex flex-col items-center justify-center p-2 rounded-xl transition-colors ${isInVoice ? 'bg-emerald-100 text-emerald-600' : 'text-slate-500 hover:bg-slate-50'} tooltip`} title="Voice Chat">
+            <button onClick={toggleVoice} className={`flex flex-col items-center justify-center p-2 rounded-xl transition-colors ${isInVoice ? 'bg-emerald-100 text-emerald-600' : 'text-slate-500 hover:bg-slate-50'}`}>
               {isInVoice ? <Mic size={20} /> : <MicOff size={20} />}
               <span className="text-[0.6rem] mt-1 font-semibold">Voice</span>
             </button>
 
-            <button 
-              onClick={handleClear}
-              className="flex flex-col items-center justify-center mt-2 p-2 rounded-xl text-red-500 hover:bg-red-50 transition-colors tooltip" title="Clear Board"
-            >
+            <button onClick={handleClear} className="flex flex-col items-center justify-center mt-2 p-2 rounded-xl text-red-500 hover:bg-red-50 transition-colors" title="Clear Board">
               <Trash2 size={20} strokeWidth={2.5} />
               <span className="text-[0.6rem] mt-1 font-semibold">Clear</span>
             </button>
@@ -454,8 +525,9 @@ export default function Whiteboard({ roomId, username, onLeave }: WhiteboardProp
         </aside>
 
         {/* Canvas Area */}
-        <main className="flex-1 relative overflow-hidden bg-[#fafafa]">
-          <div className="absolute inset-0 z-0 pointer-events-none"
+        <main className="flex-1 relative bg-[#fafafa]">
+          
+          <div className="absolute inset-0 pointer-events-none" 
                style={{ backgroundImage: 'radial-gradient(circle at 2px 2px, #cbd5e1 1px, transparent 0)', backgroundSize: '30px 30px' }}
           />
 
@@ -467,82 +539,50 @@ export default function Whiteboard({ roomId, username, onLeave }: WhiteboardProp
                   <div className="w-8 h-8 rounded-full bg-indigo-100 text-indigo-600 flex items-center justify-center font-bold text-sm">
                     {activeSpeaker ? activeSpeaker.username[0].toUpperCase() : username[0].toUpperCase()}
                   </div>
-                  <div className="absolute -bottom-1 -right-1 bg-emerald-500 text-white p-0.5 rounded-full border border-white">
-                    <span className="w-2.5 h-2.5 block rounded-full bg-white animate-pulse"></span>
-                  </div>
                 </div>
                 <div className="flex flex-col">
                   <span className="text-[0.6rem] font-bold text-emerald-600 uppercase tracking-wider">Voice: Active</span>
-                  <span className="text-sm font-bold text-slate-800">{activeSpeaker ? activeSpeaker.username : username} is speaking...</span>
+                  <span className="text-sm font-bold text-slate-800">{activeSpeaker ? activeSpeaker.username : username} speaking...</span>
                 </div>
-              </div>
-              <div className="w-px h-8 bg-slate-200 mx-1"></div>
-              <div className="flex gap-2">
-                <button onClick={() => setIsMuted(!isMuted)} className={`p-2.5 rounded-full transition-colors ${isMuted ? 'text-red-500 bg-red-100' : 'text-slate-500 hover:bg-slate-100'}`}>
-                   {isMuted ? <MicOff size={18} /> : <Mic size={18} />}
-                </button>
-                <button onClick={toggleVoice} className="p-2.5 text-red-500 bg-red-50 hover:bg-red-500 hover:text-white rounded-full transition-all shadow-sm"><PhoneOff size={18} /></button>
               </div>
             </div>
           )}
 
-          {actions.length === 0 && (
-            <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none z-0">
-              <div className="border-2 border-dashed border-slate-200 bg-white/50 rounded-3xl w-full max-w-2xl h-80 flex flex-col items-center justify-center backdrop-blur-sm">
-                <div className="bg-[#e0e7ff] p-4 rounded-2xl mb-4 shadow-sm">
-                  <PenTool size={32} className="text-[#4338ca]" strokeWidth={2.5} />
-                </div>
-                <h2 className="text-3xl font-extrabold text-slate-900 mb-2">Start Sketching</h2>
-                <p className="text-slate-500 text-center max-w-sm font-medium">Select a tool from the left sidebar to begin collaborating.</p>
-              </div>
+          {/* Core Fabric Canvas Container */}
+          <div ref={containerRef} className="absolute inset-0 z-10 touch-none">
+            <canvas ref={canvasElRef} className="absolute inset-0" />
+            
+            {/* Overlay hint if Pan/Zooming trackpad is active */}
+            <div className="absolute top-4 left-4 pointer-events-none text-[0.65rem] font-bold text-slate-400 tracking-wider">
+               CTRL / CMD + TRACKPAD SCROLL TO ZOOM
             </div>
-          )}
-
-          <div ref={containerRef} className="absolute inset-0 z-10 cursor-crosshair">
-            <canvas
-              ref={canvasRef}
-              onMouseDown={startDrawing}
-              onMouseMove={draw}
-              onMouseUp={stopDrawing}
-              onMouseOut={stopDrawing}
-              onTouchStart={startDrawing}
-              onTouchMove={draw}
-              onTouchEnd={stopDrawing}
-              className="block w-full h-full bg-transparent touch-none"
-            />
           </div>
 
           {/* Bottom Floating Toolbar */}
-          <div className="absolute bottom-8 left-1/2 transform -translate-x-1/2 z-20 bg-white/95 backdrop-blur-md rounded-full shadow-[0_8px_30px_rgba(0,0,0,0.12)] border border-slate-100 flex items-center py-2 px-4 gap-4">
-            <div className="flex gap-1.5 items-center">
+          <div className="absolute bottom-8 left-1/2 transform -translate-x-1/2 z-20 bg-white/95 backdrop-blur-md rounded-full shadow-[0_8px_30px_rgba(0,0,0,0.12)] border border-slate-100 flex flex-wrap items-center justify-center py-2 px-4 gap-4">
+            <div className="flex gap-1.5 items-center bg-slate-50 p-1.5 rounded-full border border-slate-100">
               {colors.map((c) => (
                 <button
                   key={c}
                   onClick={() => setColor(c)}
                   className={`w-6 h-6 rounded-full transition-transform hover:scale-110 ${
-                    color === c ? 'shadow-[0_0_0_2px_white,0_0_0_4px_#cbd5e1] scale-110' : ''
+                    color === c ? 'shadow-[0_0_0_2px_white,0_0_0_4px_#4338ca] scale-110' : ''
                   } ${c === '#ffffff' ? 'border border-slate-200' : ''}`}
                   style={{ backgroundColor: c }}
                 />
               ))}
             </div>
             
-            <div className="w-px h-6 bg-slate-200 mx-1 sm:mx-2"></div>
+            <div className="w-px h-6 bg-slate-200 mx-1"></div>
 
             <div className="flex items-center gap-3">
+              <div className="text-xs font-bold text-slate-500 uppercase">Width</div>
               <input 
-                type="range" min="1" max="20" 
+                type="range" min="1" max="50" 
                 value={lineWidth} 
                 onChange={(e) => setLineWidth(Number(e.target.value))}
-                className="w-16 sm:w-24 h-1.5 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-[#4338ca]"
+                className="w-24 h-1.5 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-[#4338ca]"
               />
-            </div>
-
-            <div className="w-px h-6 bg-slate-200 mx-1 sm:mx-2"></div>
-
-            <div className="flex gap-2">
-              <button onClick={handleUndo} disabled={actions.length===0} className="text-slate-600 hover:text-[#4338ca] disabled:opacity-30 disabled:hover:text-slate-600 p-1 transition-colors"><Undo2 size={20} /></button>
-              <button onClick={handleRedo} disabled={undoStack.length===0} className="text-slate-600 hover:text-[#4338ca] disabled:opacity-30 disabled:hover:text-slate-600 p-1 transition-colors"><Redo2 size={20} /></button>
             </div>
           </div>
         </main>
@@ -561,7 +601,7 @@ export default function Whiteboard({ roomId, username, onLeave }: WhiteboardProp
                   return (
                     <div key={idx} className="flex items-center justify-center my-1 w-full relative">
                       <div className="absolute w-full h-px bg-slate-200 top-1/2"></div>
-                      <span className="text-[0.6rem] font-bold text-slate-400 tracking-wider uppercase bg-[#fafafa] px-2 relative z-10">{msg.text}</span>
+                      <span className="text-[0.6rem] font-bold text-slate-400 uppercase bg-[#fafafa] px-2 relative z-10">{msg.text}</span>
                     </div>
                   );
                 }
@@ -594,11 +634,9 @@ export default function Whiteboard({ roomId, username, onLeave }: WhiteboardProp
                   placeholder="Message team..." 
                   className="w-full bg-transparent border-none px-4 py-3 text-sm text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-0"
                 />
-                <div className="flex items-center pr-1.5 gap-0.5">
-                  <button type="submit" className="p-1.5 bg-[#4338ca] text-white rounded-[10px] hover:bg-[#3730a3] transition-colors shadow-sm disabled:opacity-50" disabled={!newMessage.trim()}>
-                    <Send size={16} className="transform translate-x-[1px] translate-y-[-1px]" />
-                  </button>
-                </div>
+                <button type="submit" className="p-1.5 bg-[#4338ca] text-white rounded-[10px] hover:bg-[#3730a3] transition-colors shadow-sm disabled:opacity-50 m-1" disabled={!newMessage.trim()}>
+                  <Send size={16} />
+                </button>
               </form>
             </div>
           </aside>
