@@ -175,8 +175,15 @@ export default function Whiteboard({ roomId, username, onLeave }: WhiteboardProp
       }
     };
     checkSize();
+    
+    const observer = new ResizeObserver(checkSize);
+    if (containerRef.current) observer.observe(containerRef.current);
+
     window.addEventListener('resize', checkSize);
-    return () => window.removeEventListener('resize', checkSize);
+    return () => {
+      window.removeEventListener('resize', checkSize);
+      observer.disconnect();
+    };
   }, []);
 
   // ========== WebSockets ==========
