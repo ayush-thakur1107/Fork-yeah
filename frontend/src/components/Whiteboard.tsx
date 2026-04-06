@@ -51,7 +51,7 @@ export default function Whiteboard({ roomId, username, onLeave }: WhiteboardProp
   // Custom Alert Modal
   const [alertMsg, setAlertMsg] = useState('');
 
-  const backendUrl = import.meta.env.VITE_BACKEND_URL || 'http://localhost:3001';
+  const backendUrl = import.meta.env.VITE_BACKEND_URL || (import.meta.env.PROD ? '' : 'http://localhost:3001');
   const generateId = () => Math.random().toString(36).substring(2, 9);
 
   const showAlert = (msg: string) => {
@@ -85,6 +85,13 @@ export default function Whiteboard({ roomId, username, onLeave }: WhiteboardProp
         if (zoom > 20) zoom = 20;
         if (zoom < 0.05) zoom = 0.05;
         initCanvas.zoomToPoint({ x: e.offsetX, y: e.offsetY }, zoom);
+        
+        const vpt = initCanvas.viewportTransform;
+        const gridDiv = document.getElementById('bg-grid');
+        if (gridDiv && vpt) {
+           gridDiv.style.backgroundSize = `${30 * zoom}px ${30 * zoom}px`;
+           gridDiv.style.backgroundPosition = `${vpt[4]}px ${vpt[5]}px`;
+        }
       } else {
         // Pan
         e.preventDefault();
@@ -93,6 +100,11 @@ export default function Whiteboard({ roomId, username, onLeave }: WhiteboardProp
           vpt[4] -= e.deltaX;
           vpt[5] -= e.deltaY;
           initCanvas.requestRenderAll();
+          
+          const gridDiv = document.getElementById('bg-grid');
+          if (gridDiv) {
+             gridDiv.style.backgroundPosition = `${vpt[4]}px ${vpt[5]}px`;
+          }
         }
       }
     });
@@ -245,7 +257,10 @@ export default function Whiteboard({ roomId, username, onLeave }: WhiteboardProp
         canvas.freeDrawingBrush.width = lineWidth;
       } else if (activeTool === 'paintbrush') {
         if (brushMode === 'spray') canvas.freeDrawingBrush = new fabric.SprayBrush(canvas);
-        else canvas.freeDrawingBrush = new fabric.CircleBrush(canvas);
+        else {
+          // @ts-ignore
+          canvas.freeDrawingBrush = new fabric.CircleBrush(canvas);
+        }
         canvas.freeDrawingBrush.color = color;
         canvas.freeDrawingBrush.width = lineWidth * 3;
       } else if (activeTool === 'highlighter') {
@@ -396,6 +411,15 @@ export default function Whiteboard({ roomId, username, onLeave }: WhiteboardProp
       }
       
       try {
+        // WORKAROUND: Force Chrome to prompt for permission securely, then instantly release the lock!
+        // This solves the bug where SpeechRecognition silently fails due to missing permissions on HTTP.
+        try {
+           const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+           stream.getTracks().forEach(track => track.stop());
+        } catch (mediaErr) {
+           console.warn("getUserMedia probe failed:", mediaErr);
+        }
+        
         const recognition = new SpeechRecognition();
         recognition.continuous = true;
         recognition.interimResults = true;
@@ -437,11 +461,13 @@ export default function Whiteboard({ roomId, username, onLeave }: WhiteboardProp
            if (e.error === 'no-speech') return; // Ignore temporary silence errors
            
            if (e.error === 'not-allowed') {
-              showAlert("Microphone access was denied by your browser!");
+              showAlert("Error: Microphone access was blocked by your browser.");
+           } else if (e.error === 'network') {
+              showAlert("Network Error: Google Speech API requires an internet connection or HTTPS secure context.");
            } else if (e.error === 'audio-capture') {
-              showAlert("Microphone not found or is being used by another app.");
+              showAlert("Hardware Error: Microphone locked by Windows or not detected.");
            } else {
-              showAlert(`Live Captions Error: ${e.error}`);
+              showAlert(`Live Captions Error: [${e.error}] Check browser permissions.`);
            }
            
            // Kill the engine on fatal errors so it doesn't loop
@@ -644,8 +670,8 @@ export default function Whiteboard({ roomId, username, onLeave }: WhiteboardProp
         {/* Canvas Area */}
         <main className="flex-1 relative bg-[#fafafa]">
           
-          <div className="absolute inset-0 pointer-events-none" 
-               style={{ backgroundImage: 'radial-gradient(circle at 2px 2px, #cbd5e1 1px, transparent 0)', backgroundSize: '30px 30px' }}
+          <div id="bg-grid" className="absolute inset-0 pointer-events-none" 
+               style={{ backgroundImage: 'radial-gradient(circle at 2px 2px, #cbd5e1 1px, transparent 0)', backgroundSize: '30px 30px', backgroundPosition: '0px 0px' }}
           />
 
           {(isInVoice || activeSpeaker) && (

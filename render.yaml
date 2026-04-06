@@ -1,0 +1,10 @@
+services:
+  - type: web
+    name: livecollab-hackathon
+    env: node
+    rootDir: backend
+    buildCommand: cd ../frontend && npm install && npm run build && cd ../backend && npm install
+    startCommand: node server.js
+    envVars:
+      - key: NODE_ENV
+        value: production

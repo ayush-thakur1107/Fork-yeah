@@ -18,8 +18,36 @@ export default function Lobby({ onJoin }: LobbyProps) {
   };
 
   return (
-    <div className="w-full h-full min-h-screen bg-[#f3f4f8] bg-gradient-to-br from-[#eef2f9] via-[#f4f5fa] to-[#e4e8f5] flex text-slate-900 overflow-y-auto">
-      <div className="w-full max-w-7xl mx-auto flex flex-col lg:flex-row items-center justify-center px-6 py-12 lg:py-20 lg:px-12 gap-12 lg:gap-24 relative">
+    <div className="w-full h-full min-h-screen bg-[#0f172a] bg-gradient-to-br from-[#0f172a] via-[#1e1b4b] to-[#0f172a] flex text-slate-100 overflow-hidden relative">
+      
+      {/* Animated Neon Glowing Entities */}
+      <div className="absolute inset-0 overflow-hidden pointer-events-none opacity-40 z-0">
+         <div className="absolute top-[30%] left-[-20%] w-[150%] h-[3px] bg-gradient-to-r from-transparent via-cyan-400 to-transparent blur-[4px] glow-float-1 rotate-12"></div>
+         <div className="absolute top-[70%] left-[-10%] w-[120%] h-[4px] bg-gradient-to-r from-transparent via-[#4f46e5] to-transparent blur-[5px] glow-float-2 -rotate-[8deg]"></div>
+         <div className="absolute top-[80%] left-[-30%] w-[140%] h-[3px] bg-gradient-to-r from-transparent via-fuchsia-400 to-transparent blur-[4px] glow-float-3 rotate-[24deg]"></div>
+      </div>
+      <style>{`
+        @keyframes flowRight {
+          0% { transform: translateY(0) rotate(12deg) scaleX(1); opacity: 0.3; }
+          50% { transform: translateY(-30px) rotate(14deg) scaleX(1.1); opacity: 0.8; }
+          100% { transform: translateY(0) rotate(12deg) scaleX(1); opacity: 0.3; }
+        }
+        @keyframes flowLeft {
+          0% { transform: translateY(0) rotate(-8deg) translateX(-50px); opacity: 0.2; }
+          50% { transform: translateY(40px) rotate(-10deg) translateX(50px); opacity: 0.6; }
+          100% { transform: translateY(0) rotate(-8deg) translateX(-50px); opacity: 0.2; }
+        }
+        @keyframes floatDiag {
+          0% { transform: translateY(0) rotate(24deg) scale(0.9); opacity: 0.2; }
+          50% { transform: translateY(-50px) rotate(22deg) scale(1.05); opacity: 0.7; }
+          100% { transform: translateY(0) rotate(24deg) scale(0.9); opacity: 0.2; }
+        }
+        .glow-float-1 { animation: flowRight 6s ease-in-out infinite; }
+        .glow-float-2 { animation: flowLeft 8s ease-in-out infinite; }
+        .glow-float-3 { animation: floatDiag 7s ease-in-out infinite; }
+      `}</style>
+
+      <div className="w-full max-w-7xl mx-auto flex flex-col lg:flex-row items-center justify-center px-6 py-12 lg:py-20 lg:px-12 gap-12 lg:gap-24 relative z-10">
         
         {/* Left Side: Hero Text & Features */}
         <div className="flex-1 w-full max-w-xl self-center pt-8 lg:pt-0">
@@ -30,27 +58,27 @@ export default function Lobby({ onJoin }: LobbyProps) {
             LiveCollab
           </div>
 
-          <h1 className="text-5xl lg:text-6xl font-[800] leading-[1.1] tracking-tight text-slate-900 mb-6">
+          <h1 className="text-5xl lg:text-6xl font-[800] leading-[1.1] tracking-tight text-white mb-6">
             Where ideas find <br />
-            <span className="text-[#4f46e5]">their perfect form.</span>
+            <span className="text-cyan-400">their perfect form.</span>
           </h1>
 
-          <p className="text-slate-600 text-lg lg:text-xl font-medium leading-relaxed mb-12 max-w-md">
-            Join 10,000+ teams who use our digital curator canvas to brainstorm, design, and ship faster.
+          <p className="text-slate-300 text-lg lg:text-xl font-medium leading-relaxed mb-12 max-w-md">
+            A premium, real-time collaborative whiteboard built purely for our hackathon project. No fluff, just creation.
           </p>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
-            <div className="bg-white rounded-2xl p-6 shadow-[0_8px_30px_rgba(0,0,0,0.04)] border border-slate-100/50 hover:shadow-[0_8px_30px_rgba(79,70,229,0.1)] transition-all">
-              <Users size={24} className="text-[#4f46e5] mb-4" />
-              <h3 className="font-bold text-slate-900 mb-3 text-[1.05rem]">Real-time Presence</h3>
-              <p className="text-slate-500 text-sm leading-relaxed font-medium">
+            <div className="bg-slate-800/40 backdrop-blur-md rounded-2xl p-6 shadow-[0_8px_30px_rgba(0,0,0,0.2)] border border-slate-700/50 hover:shadow-[0_8px_30px_rgba(34,211,238,0.1)] transition-all">
+              <Users size={24} className="text-cyan-400 mb-4" />
+              <h3 className="font-bold text-white mb-3 text-[1.05rem]">Real-time Presence</h3>
+              <p className="text-slate-400 text-sm leading-relaxed font-medium">
                 See every stroke, every thought, every collaborator instantly.
               </p>
             </div>
-            <div className="bg-white rounded-2xl p-6 shadow-[0_8px_30px_rgba(0,0,0,0.04)] border border-slate-100/50 hover:shadow-[0_8px_30px_rgba(79,70,229,0.1)] transition-all">
+            <div className="bg-slate-800/40 backdrop-blur-md rounded-2xl p-6 shadow-[0_8px_30px_rgba(0,0,0,0.2)] border border-slate-700/50 hover:shadow-[0_8px_30px_rgba(79,70,229,0.1)] transition-all">
               <PenTool size={24} className="text-[#4f46e5] mb-4" />
-              <h3 className="font-bold text-slate-900 mb-3 text-[1.05rem]">Infinite Canvas</h3>
-              <p className="text-slate-500 text-sm leading-relaxed font-medium">
+              <h3 className="font-bold text-white mb-3 text-[1.05rem]">Infinite Canvas</h3>
+              <p className="text-slate-400 text-sm leading-relaxed font-medium">
                 Unbounded space for your biggest ideas and wildest sketches.
               </p>
             </div>
@@ -59,31 +87,31 @@ export default function Lobby({ onJoin }: LobbyProps) {
 
         {/* Right Side: Join Box */}
         <div className="w-full max-w-[460px] pb-24 lg:pb-0">
-          <div className="bg-white rounded-[2rem] p-10 shadow-[0_20px_60px_-15px_rgba(0,0,0,0.05)] border border-slate-100 relative">
-            <h2 className="text-2xl font-bold text-slate-900 mb-2">Join your workspace</h2>
-            <p className="text-slate-500 text-sm font-medium mb-8">Welcome back! Please enter your details.</p>
+          <div className="bg-slate-900/60 backdrop-blur-xl rounded-[2rem] p-10 shadow-[0_20px_60px_-15px_rgba(0,0,0,0.3)] border border-slate-700/50 relative">
+            <h2 className="text-2xl font-bold text-white mb-2">Join your workspace</h2>
+            <p className="text-slate-400 text-sm font-medium mb-8">Ready to build? Please enter your details.</p>
 
             <form onSubmit={handleSubmit} className="space-y-6">
               <div>
-                <label className="block text-[0.8rem] font-bold text-slate-800 mb-2">Your Name</label>
+                <label className="block text-[0.8rem] font-bold text-slate-300 mb-2">Your Name</label>
                 <input
                   type="text"
                   required
                   value={username}
                   onChange={(e) => setUsername(e.target.value)}
-                  className="w-full bg-[#f8f9fc] border border-transparent focus:border-[#4f46e5]/30 focus:bg-white rounded-xl px-4 py-3 text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-4 focus:ring-[#4f46e5]/10 transition-all font-medium text-[0.95rem]"
+                  className="w-full bg-slate-800/50 border border-slate-700 focus:border-cyan-400/50 focus:bg-slate-800 rounded-xl px-4 py-3 text-white placeholder-slate-500 focus:outline-none focus:ring-4 focus:ring-cyan-400/10 transition-all font-medium text-[0.95rem]"
                   placeholder="e.g. Alex"
                 />
               </div>
               
               <div>
-                <label className="block text-[0.8rem] font-bold text-slate-800 mb-2">Room ID</label>
+                <label className="block text-[0.8rem] font-bold text-slate-300 mb-2">Room ID</label>
                 <input
                   type="text"
                   value={roomId}
                   onChange={(e) => setRoomId(e.target.value)}
-                  className="w-full bg-[#f8f9fc] border border-transparent focus:border-[#4f46e5]/30 focus:bg-white rounded-xl px-4 py-3 text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-4 focus:ring-[#4f46e5]/10 transition-all font-medium text-[0.95rem]"
-                  placeholder="e.g. team-alpha (leave empty for random)"
+                  className="w-full bg-slate-800/50 border border-slate-700 focus:border-[#4f46e5]/50 focus:bg-slate-800 rounded-xl px-4 py-3 text-white placeholder-slate-500 focus:outline-none focus:ring-4 focus:ring-[#4f46e5]/10 transition-all font-medium text-[0.95rem]"
+                  placeholder="e.g. hackathon-alpha (leave empty for random)"
                 />
               </div>
 
@@ -128,25 +156,9 @@ export default function Lobby({ onJoin }: LobbyProps) {
       </div>
 
       {/* Footer / Bottom Elements */}
-      <div className="absolute bottom-6 left-0 right-0 max-w-7xl mx-auto px-12 flex flex-col md:flex-row justify-between items-center z-10 pointer-events-none">
-        <div className="hidden lg:flex gap-8 text-[0.7rem] font-bold tracking-widest text-slate-400 pointer-events-auto">
-          <a href="#" className="hover:text-slate-600 transition-colors uppercase">Privacy Policy</a>
-          <a href="#" className="hover:text-slate-600 transition-colors uppercase">Terms of Service</a>
-          <a href="#" className="hover:text-slate-600 transition-colors uppercase">Help Center</a>
-        </div>
-        
-        <div className="absolute lg:relative bottom-4 right-6 lg:bottom-0 lg:right-0 bg-white/80 backdrop-blur-md px-3 py-2 rounded-full border border-slate-200 shadow-sm flex items-center gap-3">
-          <div className="flex -space-x-2">
-            <img className="w-8 h-8 rounded-full border-2 border-white" src="https://i.pravatar.cc/150?1" alt="Avatar" />
-            <img className="w-8 h-8 rounded-full border-2 border-white" src="https://i.pravatar.cc/150?2" alt="Avatar" />
-            <div className="w-8 h-8 rounded-full border-2 border-white bg-[#8b92ff] text-white flex justify-center items-center text-[0.65rem] font-bold">
-              +12
-            </div>
-          </div>
-          <div className="pr-2 hidden sm:block">
-            <div className="text-[0.55rem] font-bold text-[#4f46e5] tracking-widest uppercase leading-tight">Live Presence</div>
-            <div className="text-[0.7rem] font-semibold text-slate-800 leading-tight">Designers currently active</div>
-          </div>
+      <div className="absolute bottom-6 left-0 right-0 max-w-7xl mx-auto px-12 flex justify-center items-center z-10 pointer-events-none">
+        <div className="hidden lg:flex gap-8 text-[0.7rem] font-bold tracking-widest text-slate-500 pointer-events-auto">
+          <div className="uppercase">Hackathon Project Demo</div>
         </div>
       </div>
     </div>

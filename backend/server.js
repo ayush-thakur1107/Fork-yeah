@@ -2,6 +2,7 @@ const express = require("express");
 const http = require("http");
 const { Server } = require("socket.io");
 const cors = require("cors");
+const path = require("path");
 require("dotenv").config();
 
 const app = express();
@@ -77,6 +78,11 @@ io.on("connection", (socket) => {
   });
 });
 
+// Serve frontend static files
+app.use(express.static(path.join(__dirname, "../frontend/dist")));
+app.get("*", (req, res) => {
+  res.sendFile(path.join(__dirname, "../frontend/dist/index.html"));
+});
+
 const PORT = process.env.PORT || 3001;
-app.get("/", (req, res) => res.send("LiveCollab Server is running."));
 server.listen(PORT, () => console.log(`🚀 Server is running on port ${PORT}`));
