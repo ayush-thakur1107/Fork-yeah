@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
 import { io, Socket } from 'socket.io-client';
-import { Stage, Layer, Rect, Circle, RegularPolygon, Line, Text, Image as KonvaImage } from 'react-konva';
+import { Stage, Layer, Rect, Circle, RegularPolygon, Line, Text, Image as KonvaImage, Transformer } from 'react-konva';
 import {
   LogOut, Trash2, MessageSquare, MousePointer2, PenTool, Highlighter, Triangle, 
   Circle as CircleIcon, Square, Type, Eraser, MicOff, Mic, Send, Copy, Upload, 
-  Bell, Hexagon, BarChart2, CheckSquare
+  Bell, Hexagon, BarChart2, CheckSquare, Undo2, Redo2, Download, Sun, Moon
 } from 'lucide-react';
 import type { PollData } from './PollWidget';
 import type { GraphData } from './GraphWidget';
@@ -54,6 +54,7 @@ export interface BoardElement {
   pollData?: PollData;
   graphData?: GraphData;
   isHighlighter?: boolean;
+  brushType?: 'marker' | 'chisel' | 'neon';
 }
 
 const generateId = () => Math.random().toString(36).substring(2, 10);
@@ -65,9 +66,13 @@ export default function Whiteboard({ roomId, username, onLeave }: WhiteboardProp
   
   // Canvas State & Konva Viewport
   const [elements, setElements] = useState<BoardElement[]>([]);
+  const [currentElement, setCurrentElement] = useState<BoardElement | null>(null);
+  const [undoStack, setUndoStack] = useState<BoardElement[][]>([]);
+  const [redoStack, setRedoStack] = useState<BoardElement[][]>([]);
   const [stagePos, setStagePos] = useState({ x: 0, y: 0 });
   const [stageScale, setStageScale] = useState(1);
   const [stageSize, setStageSize] = useState({ width: window.innerWidth, height: window.innerHeight });
+  const [theme, setTheme] = useState<'light' | 'dark'>('light');
   
   // UI States
   const [strokeColor, setStrokeColor] = useState('#4338ca');
@@ -77,8 +82,12 @@ export default function Whiteboard({ roomId, username, onLeave }: WhiteboardProp
   
   const [activeTool, setActiveTool] = useState('select');
   const [shapeMode, setShapeMode] = useState<'rect' | 'circle' | 'triangle' | 'polygon'>('rect');
+  const [brushType, setBrushType] = useState<'marker' | 'chisel' | 'neon'>('marker');
+  const [selectedId, setSelectedId] = useState<string | null>(null);
   
-  // Drawing state
+  // Drawing & Refs
+  const stageRef = useRef<any>(null);
+  const trRef = useRef<any>(null);
   const isDrawing = useRef(false);
   const currentElementId = useRef<string | null>(null);
 
@@ -105,6 +114,55 @@ export default function Whiteboard({ roomId, username, onLeave }: WhiteboardProp
     setAlertMsg(msg);
     setTimeout(() => setAlertMsg(''), 4000);
   };
+
+  // ========== History & Undo/Redo ==========
+  const saveHistory = () => {
+    setUndoStack(prev => [...prev, elements].slice(-20));
+    setRedoStack([]);
+  };
+  const handleUndo = () => {
+    if (undoStack.length === 0) return;
+    const prev = undoStack[undoStack.length - 1];
+    setRedoStack(r => [...r, elements]);
+    setUndoStack(u => u.slice(0, -1));
+    setElements(prev);
+    setSelectedId(null);
+    socket?.emit('state-replace', { roomId, elements: prev });
+  };
+  const handleRedo = () => {
+    if (redoStack.length === 0) return;
+    const next = redoStack[redoStack.length - 1];
+    setUndoStack(u => [...u, elements]);
+    setRedoStack(r => r.slice(0, -1));
+    setElements(next);
+    setSelectedId(null);
+    socket?.emit('state-replace', { roomId, elements: next });
+  };
+
+  // ========== Transformer Selection ==========
+  useEffect(() => {
+    if (activeTool === 'select' && selectedId && trRef.current && stageRef.current) {
+      const node = stageRef.current.findOne('#' + selectedId);
+      if (node) {
+        trRef.current.nodes([node]);
+        trRef.current.getLayer().batchDraw();
+      }
+    } else if (trRef.current) {
+      trRef.current.nodes([]);
+      trRef.current.getLayer().batchDraw();
+    }
+  }, [selectedId, activeTool, elements, currentElement]);
+
+  // Prevent browser from scrolling/panning when wheeling on canvas
+  useEffect(() => {
+    const preventDefault = (e: WheelEvent) => {
+      if (containerRef.current?.contains(e.target as Node)) {
+        e.preventDefault();
+      }
+    };
+    document.addEventListener('wheel', preventDefault, { passive: false });
+    return () => document.removeEventListener('wheel', preventDefault);
+  }, []);
 
   // ========== Window Resize ==========
   useEffect(() => {
@@ -169,6 +227,11 @@ export default function Whiteboard({ roomId, username, onLeave }: WhiteboardProp
     newSocket.on('clear', () => {
       setElements([]);
     });
+    
+    newSocket.on('state-replace', (els: BoardElement[]) => {
+      setElements(els);
+      setSelectedId(null);
+    });
 
     newSocket.on('chat-message', (msg: ChatMessage) => {
       setMessages((prev) => [...prev, { ...msg, isMe: false }]);
@@ -203,13 +266,19 @@ export default function Whiteboard({ roomId, username, onLeave }: WhiteboardProp
 
   // ========== Drawing Logic ==========
   const handlePointerDown = (e: any) => {
-    if (activeTool === 'select') return;
+    if (activeTool === 'select') {
+      const clickedOnEmpty = e.target === e.target.getStage();
+      if (clickedOnEmpty) {
+        setSelectedId(null);
+      }
+      return;
+    }
     
-    const stage = e.target.getStage();
+    const stage = stageRef.current;
+    if (!stage) return;
     const pos = stage.getPointerPosition();
     if (!pos) return;
     
-    // Transform global point into relative scaled stage coordinate
     const x = (pos.x - stagePos.x) / stageScale;
     const y = (pos.y - stagePos.y) / stageScale;
 
@@ -218,7 +287,7 @@ export default function Whiteboard({ roomId, username, onLeave }: WhiteboardProp
     currentElementId.current = id;
     
     let newElem: BoardElement = {
-      id, x, y, strokeColor, fillColor: fillColor !== 'transparent' ? fillColor : undefined, strokeWidth: lineWidth, dashStyle, type: 'rect'
+      id, x, y, strokeColor, fillColor: fillColor !== 'transparent' ? fillColor : undefined, strokeWidth: lineWidth, dashStyle, type: 'rect', brushType
     };
     
     if (activeTool === 'pencil' || activeTool === 'paintbrush') {
@@ -242,9 +311,10 @@ export default function Whiteboard({ roomId, username, onLeave }: WhiteboardProp
     } else if (activeTool === 'text') {
       newElem.type = 'text';
       newElem.text = 'Double click to edit';
-      newElem.fillColor = strokeColor; // Text usually uses stroke color for its fill
+      newElem.fillColor = strokeColor;
+      saveHistory();
       syncAdd(newElem);
-      setElements([...elements, newElem]);
+      setElements(prev => [...prev, newElem]);
       setActiveTool('select');
       isDrawing.current = false;
       return;
@@ -252,26 +322,23 @@ export default function Whiteboard({ roomId, username, onLeave }: WhiteboardProp
        return;
     }
 
-    setElements([...elements, newElem]);
-    syncAdd(newElem);
+    setCurrentElement(newElem);
   };
 
-  const handlePointerMove = (e: any) => {
+  const handlePointerMove = (_e: any) => {
     if (!isDrawing.current || activeTool === 'select' || activeTool === 'text') return;
     
-    const stage = e.target.getStage();
+    const stage = stageRef.current;
+    if (!stage) return;
     const pos = stage.getPointerPosition();
     if (!pos) return;
 
     const currentX = (pos.x - stagePos.x) / stageScale;
     const currentY = (pos.y - stagePos.y) / stageScale;
 
-    setElements(prev => {
-      const idx = prev.findIndex(el => el.id === currentElementId.current);
-      if (idx === -1) return prev;
-      
-      const newItems = [...prev];
-      const el = { ...newItems[idx] };
+    setCurrentElement(prev => {
+      if (!prev) return prev;
+      const el = { ...prev };
       
       if (el.type === 'freehand' && el.points) {
         el.points = [...el.points, currentX, currentY];
@@ -283,33 +350,32 @@ export default function Whiteboard({ roomId, username, onLeave }: WhiteboardProp
         const dy = currentY - el.y;
         el.radius = Math.sqrt(dx * dx + dy * dy);
       }
-      
-      newItems[idx] = el;
-      return newItems;
+      return el;
     });
   };
 
   const handlePointerUp = () => {
-    if (isDrawing.current && currentElementId.current) {
-       const el = elements.find(e => e.id === currentElementId.current);
-       if (el) syncModify(el);
+    if (isDrawing.current && currentElementId.current && currentElement) {
+       saveHistory();
+       setElements(prev => [...prev, currentElement]);
+       syncAdd(currentElement);
+       setCurrentElement(null);
     }
     isDrawing.current = false;
     currentElementId.current = null;
   };
 
   // Zoom / Pan
-  const handleWheel = (e: any) => {
-    e.evt.preventDefault();
-    if (e.evt.ctrlKey || e.evt.metaKey) {
+  const handleWheel = (e: React.WheelEvent<HTMLDivElement>) => {
+    if (e.ctrlKey || e.metaKey) {
       // Zoom
-      const scaleBy = 0.99;
-      const stage = e.target.getStage();
+      const scaleBy = 0.90;
+      const stage = stageRef.current;
+      if (!stage) return;
       const oldScale = stage.scaleX();
-      const pointer = stage.getPointerPosition();
-      if (!pointer) return;
+      const pointer = stage.getPointerPosition() || { x: e.clientX, y: e.clientY };
       
-      let newScale = e.evt.deltaY > 0 ? oldScale * scaleBy : oldScale / scaleBy;
+      let newScale = e.deltaY > 0 ? oldScale * scaleBy : oldScale / scaleBy;
       if (newScale > 20) newScale = 20;
       if (newScale < 0.05) newScale = 0.05;
       
@@ -325,18 +391,30 @@ export default function Whiteboard({ roomId, username, onLeave }: WhiteboardProp
       });
     } else {
       // Pan
-      setStagePos({
-        x: stagePos.x - e.evt.deltaX,
-        y: stagePos.y - e.evt.deltaY
-      });
+      setStagePos(prev => ({
+        x: prev.x - e.deltaX,
+        y: prev.y - e.deltaY
+      }));
     }
   };
 
   const handleClear = () => {
     if (window.confirm("Clear the entire board?")) {
+      saveHistory();
       setElements([]);
       socket?.emit('clear', roomId);
     }
+  };
+
+  const exportImage = () => {
+    if (!stageRef.current) return;
+    const uri = stageRef.current.toDataURL({ pixelRatio: 2 });
+    const link = document.createElement('a');
+    link.download = `LiveCollab-Board-${roomId}.png`;
+    link.href = uri;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
   };
 
   const handleImportImage = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -417,6 +495,13 @@ export default function Whiteboard({ roomId, username, onLeave }: WhiteboardProp
         recognition.onstart = () => setIsInVoice(true);
         recognition.onspeechstart = () => socket?.emit("voice-status", { roomId, isSpeaking: true });
         recognition.onspeechend = () => socket?.emit("voice-status", { roomId, isSpeaking: false });
+        recognition.onend = () => {
+          if (isInVoiceRef.current) {
+            try { recognition.start(); } catch(e){}
+          } else {
+            socket?.emit("voice-status", { roomId, isSpeaking: false });
+          }
+        };
         recognition.onresult = (event: any) => {
            let finalTranscript = '';
            for (let i = event.resultIndex; i < event.results.length; ++i) {
@@ -453,13 +538,47 @@ export default function Whiteboard({ roomId, username, onLeave }: WhiteboardProp
   const handleDragEnd = (e: any, id: string) => {
     const el = elements.find(el => el.id === id);
     if (!el) return;
+    saveHistory();
     const newProps = { x: e.target.x(), y: e.target.y() };
     setElements(prev => prev.map(it => it.id === id ? { ...it, ...newProps } : it));
     syncModify({ ...el, ...newProps });
   };
+
+  const handleTransformEnd = (e: any) => {
+     if (!selectedId) return;
+     const node = e.target;
+     // Convert scale into width/height naturally for our model
+     const scaleX = node.scaleX();
+     const scaleY = node.scaleY();
+     node.scaleX(1);
+     node.scaleY(1);
+     saveHistory();
+     const newProps = {
+        x: node.x(),
+        y: node.y(),
+        width: Math.max(2, node.width() * scaleX),
+        height: Math.max(2, node.height() * scaleY),
+        radius: Math.max(2, (node.radius ? node.radius() * scaleX : 0)),
+        rotation: node.rotation(),
+     };
+     setElements(prev => prev.map(it => it.id === selectedId ? { ...it, ...newProps } : it));
+     const el = elements.find(el => el.id === selectedId);
+     if (el) syncModify({ ...el, ...newProps });
+  };
+
+  const handleTextDblClick = (id: string, currentText: string) => {
+     const newText = window.prompt("Edit text:", currentText);
+     if (newText !== null && newText !== currentText) {
+       saveHistory();
+       const newProps = { text: newText };
+       setElements(prev => prev.map(e => e.id === id ? { ...e, ...newProps } : e));
+       const el = elements.find(e => e.id === id);
+       if (el) syncModify({ ...el, ...newProps });
+     }
+  };
   
   return (
-    <div className="w-full h-full flex flex-col bg-white text-slate-800 font-sans relative overflow-hidden">
+    <div className={`w-full h-full flex flex-col font-sans relative overflow-hidden transition-colors ${theme === 'dark' ? 'bg-slate-900 text-slate-100' : 'bg-white text-slate-800'}`}>
       
       {alertMsg && (
         <div className="absolute top-20 left-1/2 transform -translate-x-1/2 z-50 bg-slate-900 text-white px-6 py-3 rounded-full shadow-2xl flex items-center gap-3 animate-bounce border border-slate-700">
@@ -483,18 +602,30 @@ export default function Whiteboard({ roomId, username, onLeave }: WhiteboardProp
               +{userCount > 1 ? userCount - 1 : 0}
             </div>
           </div>
-          <button onClick={() => addWidget('poll')} className="hidden sm:flex items-center gap-2 px-3 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-50 rounded-lg">
+          <div className="flex bg-slate-100 rounded-lg p-1 mr-2 border border-slate-200">
+            <button onClick={handleUndo} disabled={undoStack.length === 0} className={`p-1 rounded transition-colors ${undoStack.length === 0 ? 'text-slate-400 opacity-50' : 'text-slate-700 hover:bg-white hover:shadow-sm'}`}><Undo2 size={16} /></button>
+            <button onClick={handleRedo} disabled={redoStack.length === 0} className={`p-1 rounded transition-colors ${redoStack.length === 0 ? 'text-slate-400 opacity-50' : 'text-slate-700 hover:bg-white hover:shadow-sm'}`}><Redo2 size={16} /></button>
+          </div>
+          <button onClick={() => addWidget('poll')} className="hidden sm:flex items-center gap-2 px-3 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-50 hover:text-slate-800 rounded-lg">
              <CheckSquare size={16}/> Insert Poll
           </button>
-          <button onClick={() => addWidget('graph')} className="hidden sm:flex items-center gap-2 px-3 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-50 rounded-lg">
+          <button onClick={() => addWidget('graph')} className="hidden sm:flex items-center gap-2 px-3 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-50 hover:text-slate-800 rounded-lg">
              <BarChart2 size={16}/> Insert Graph
           </button>
           <div className="w-px h-6 bg-slate-200 mx-1 hidden sm:block"></div>
           
-          <button onClick={() => fileInputRef.current?.click()} className="hidden md:flex items-center gap-2 px-3 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-50 rounded-lg">
+          <button onClick={() => fileInputRef.current?.click()} className="hidden md:flex items-center gap-2 px-3 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-50 hover:text-slate-800 rounded-lg">
             <Upload size={16}/> Import
           </button>
           <input type="file" ref={fileInputRef} className="hidden" accept="image/*" onChange={handleImportImage} />
+          
+          <button onClick={exportImage} className="hidden md:flex items-center gap-2 px-3 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-50 hover:text-slate-800 rounded-lg">
+            <Download size={16}/> Export
+          </button>
+          
+          <button onClick={() => setTheme(theme === 'light' ? 'dark' : 'light')} className="p-2 text-slate-500 hover:text-slate-800 bg-slate-50 rounded-lg">
+            {theme === 'light' ? <Moon size={20} /> : <Sun size={20} />}
+          </button>
           
           <button onClick={() => setIsChatOpen(!isChatOpen)} className={`transition-colors p-2 ${isChatOpen ? 'text-[#4338ca] bg-[#e0e7ff] rounded-lg' : 'text-slate-500 hover:text-slate-800'}`}>
             <MessageSquare size={20} />
@@ -539,7 +670,7 @@ export default function Whiteboard({ roomId, username, onLeave }: WhiteboardProp
         </aside>
 
         {/* Canvas & React Rnd Wrapper Container */}
-        <main className="flex-1 relative bg-[#fafafa]" ref={containerRef}>
+        <main className={`flex-1 relative ${theme === 'dark' ? 'bg-[#0f172a]' : 'bg-[#fafafa]'}`} ref={containerRef} onWheel={handleWheel}>
           {(isInVoice || activeSpeaker) && (
             <div className="absolute top-6 left-1/2 transform -translate-x-1/2 z-20 bg-white/90 backdrop-blur-md rounded-full shadow-[0_4px_25px_rgba(0,0,0,0.08)] border border-slate-100 flex items-center p-1.5 pl-3 pr-4 gap-4 animate-fade-in">
               <span className="text-[0.6rem] font-bold text-emerald-600 uppercase">Voice: {activeSpeaker ? activeSpeaker.username : username} speaking...</span>
@@ -553,8 +684,8 @@ export default function Whiteboard({ roomId, username, onLeave }: WhiteboardProp
           ))}
           <div id="bg-grid" className="absolute inset-0 pointer-events-none" 
                style={{ 
-                 backgroundImage: 'radial-gradient(circle at 2px 2px, #cbd5e1 1px, transparent 0)', 
-                 backgroundSize: `${30 * stageScale}px ${30 * stageScale}px`, 
+                 backgroundImage: theme === 'dark' ? 'radial-gradient(circle at 2px 2px, #334155 1px, transparent 0)' : 'radial-gradient(circle at 2px 2px, #cbd5e1 1px, transparent 0)', 
+                 backgroundSize: `${Math.max(10, 30 * stageScale)}px ${Math.max(10, 30 * stageScale)}px`, 
                  backgroundPosition: `${stagePos.x}px ${stagePos.y}px` 
                }}
           />
@@ -569,7 +700,7 @@ export default function Whiteboard({ roomId, username, onLeave }: WhiteboardProp
               onTouchStart={handlePointerDown}
               onTouchMove={handlePointerMove}
               onTouchEnd={handlePointerUp}
-              onWheel={handleWheel}
+              ref={stageRef}
               scaleX={stageScale}
               scaleY={stageScale}
               x={stagePos.x}
@@ -579,28 +710,44 @@ export default function Whiteboard({ roomId, username, onLeave }: WhiteboardProp
               <Layer>
                 {elements.map((el) => {
                   const isSelectable = activeTool === 'select';
+                  const isEr = el.isEraser;
+                  const str = isEr ? (theme === 'dark' ? '#0f172a' : '#fafafa') : el.strokeColor;
                   
-                  // Text double-click handling could be done here, simplified for MVP
                   if (el.type === 'text') {
-                    return <Text key={el.id} id={el.id} x={el.x} y={el.y} text={el.text || ''} fontSize={Math.max(el.strokeWidth! * 5, 20)} fill={el.fillColor || el.strokeColor} draggable={isSelectable} onDragEnd={(e) => handleDragEnd(e, el.id)} />;
+                    return <Text key={el.id} id={el.id} x={el.x} y={el.y} text={el.text || ''} fontSize={Math.max(el.strokeWidth! * 5, 20)} fill={el.fillColor || el.strokeColor} draggable={isSelectable} onDragEnd={(e) => handleDragEnd(e, el.id)} onClick={() => { if(isSelectable) setSelectedId(el.id); }} onTap={() => { if(isSelectable) setSelectedId(el.id); }} onDblClick={() => handleTextDblClick(el.id, el.text || '')} onDblTap={() => handleTextDblClick(el.id, el.text || '')} onTransformEnd={handleTransformEnd} />;
                   }
                   if (el.type === 'image' && el.src) {
-                    return <KonvaUrlImage key={el.id} id={el.id} x={el.x} y={el.y} src={el.src} draggable={isSelectable} onDragEnd={(e:any) => handleDragEnd(e, el.id)} />;
+                    return <KonvaUrlImage key={el.id} id={el.id} x={el.x} y={el.y} src={el.src} draggable={isSelectable} onDragEnd={(e:any) => handleDragEnd(e, el.id)} onClick={() => { if(isSelectable) setSelectedId(el.id); }} onTap={() => { if(isSelectable) setSelectedId(el.id); }} onTransformEnd={handleTransformEnd} />;
                   }
                   if (el.type === 'freehand' && el.points) {
-                    return <Line key={el.id} id={el.id} points={el.points} stroke={el.isEraser ? '#fafafa' : el.strokeColor} strokeWidth={el.strokeWidth} tension={0.5} lineCap="round" lineJoin="round" globalCompositeOperation={getGlobalComposite(el.isEraser)} dash={getDashProps(el.dashStyle, el.strokeWidth)} opacity={el.isHighlighter ? 0.4 : 1} draggable={isSelectable} onDragEnd={(e) => handleDragEnd(e, el.id)} />;
+                    return <Line key={el.id} id={el.id} points={el.points} stroke={str} strokeWidth={el.strokeWidth} tension={el.brushType === 'chisel' ? 0 : 0.5} lineCap={el.brushType === 'chisel' ? 'square' : 'round'} lineJoin={el.brushType === 'chisel' ? 'miter' : 'round'} globalCompositeOperation={getGlobalComposite(isEr)} dash={getDashProps(el.dashStyle, el.strokeWidth)} opacity={el.isHighlighter ? 0.4 : 1} shadowBlur={el.brushType === 'neon' ? 15 : 0} shadowColor={el.brushType === 'neon' ? el.strokeColor : undefined} draggable={isSelectable} onDragStart={saveHistory} onDragEnd={(e) => handleDragEnd(e, el.id)} onClick={() => { if(isSelectable) setSelectedId(el.id); }} onTap={() => { if(isSelectable) setSelectedId(el.id); }} onTransformEnd={handleTransformEnd} />;
                   }
                   if (el.type === 'rect') {
-                    return <Rect key={el.id} id={el.id} x={el.x} y={el.y} width={el.width || 0} height={el.height || 0} stroke={el.strokeColor} fill={el.fillColor} strokeWidth={el.strokeWidth} dash={getDashProps(el.dashStyle, el.strokeWidth)} draggable={isSelectable} onDragEnd={(e) => handleDragEnd(e, el.id)} />;
+                    return <Rect key={el.id} id={el.id} x={el.x} y={el.y} width={el.width || 0} height={el.height || 0} stroke={el.strokeColor} fill={el.fillColor} strokeWidth={el.strokeWidth} dash={getDashProps(el.dashStyle, el.strokeWidth)} draggable={isSelectable} onDragStart={saveHistory} onDragEnd={(e) => handleDragEnd(e, el.id)} onClick={() => { if(isSelectable) setSelectedId(el.id); }} onTap={() => { if(isSelectable) setSelectedId(el.id); }} onTransformEnd={handleTransformEnd} />;
                   }
                   if (el.type === 'circle') {
-                    return <Circle key={el.id} id={el.id} x={el.x} y={el.y} radius={el.radius || 0} stroke={el.strokeColor} fill={el.fillColor} strokeWidth={el.strokeWidth} dash={getDashProps(el.dashStyle, el.strokeWidth)} draggable={isSelectable} onDragEnd={(e) => handleDragEnd(e, el.id)} />;
+                    return <Circle key={el.id} id={el.id} x={el.x} y={el.y} radius={el.radius || 0} stroke={el.strokeColor} fill={el.fillColor} strokeWidth={el.strokeWidth} dash={getDashProps(el.dashStyle, el.strokeWidth)} draggable={isSelectable} onDragStart={saveHistory} onDragEnd={(e) => handleDragEnd(e, el.id)} onClick={() => { if(isSelectable) setSelectedId(el.id); }} onTap={() => { if(isSelectable) setSelectedId(el.id); }} onTransformEnd={handleTransformEnd} />;
                   }
                   if (el.type === 'triangle') {
-                    return <RegularPolygon key={el.id} id={el.id} x={el.x} y={el.y} sides={3} radius={(el.width || el.radius || 50)} stroke={el.strokeColor} fill={el.fillColor} strokeWidth={el.strokeWidth} dash={getDashProps(el.dashStyle, el.strokeWidth)} draggable={isSelectable} onDragEnd={(e) => handleDragEnd(e, el.id)} />;
+                    return <RegularPolygon key={el.id} id={el.id} x={el.x} y={el.y} sides={3} radius={(el.width || el.radius || 50)} stroke={el.strokeColor} fill={el.fillColor} strokeWidth={el.strokeWidth} dash={getDashProps(el.dashStyle, el.strokeWidth)} draggable={isSelectable} onDragStart={saveHistory} onDragEnd={(e) => handleDragEnd(e, el.id)} onClick={() => { if(isSelectable) setSelectedId(el.id); }} onTap={() => { if(isSelectable) setSelectedId(el.id); }} onTransformEnd={handleTransformEnd} />;
                   }
                   return null;
                 })}
+                
+                {currentElement && currentElement.type === 'freehand' && currentElement.points && (
+                   <Line points={currentElement.points} stroke={currentElement.isEraser ? (theme === 'dark' ? '#0f172a' : '#fafafa') : currentElement.strokeColor} strokeWidth={currentElement.strokeWidth} tension={currentElement.brushType === 'chisel' ? 0 : 0.5} lineCap={currentElement.brushType === 'chisel' ? 'square' : 'round'} lineJoin={currentElement.brushType === 'chisel' ? 'miter' : 'round'} globalCompositeOperation={getGlobalComposite(currentElement.isEraser)} dash={getDashProps(currentElement.dashStyle, currentElement.strokeWidth)} opacity={currentElement.isHighlighter ? 0.4 : 1} shadowBlur={currentElement.brushType === 'neon' ? 15 : 0} shadowColor={currentElement.brushType === 'neon' ? currentElement.strokeColor : undefined} />
+                )}
+                {currentElement && currentElement.type === 'rect' && (
+                   <Rect x={currentElement.x} y={currentElement.y} width={currentElement.width || 0} height={currentElement.height || 0} stroke={currentElement.strokeColor} fill={currentElement.fillColor} strokeWidth={currentElement.strokeWidth} dash={getDashProps(currentElement.dashStyle, currentElement.strokeWidth)} />
+                )}
+                {currentElement && currentElement.type === 'circle' && (
+                   <Circle x={currentElement.x} y={currentElement.y} radius={currentElement.radius || 0} stroke={currentElement.strokeColor} fill={currentElement.fillColor} strokeWidth={currentElement.strokeWidth} dash={getDashProps(currentElement.dashStyle, currentElement.strokeWidth)} />
+                )}
+                {currentElement && currentElement.type === 'triangle' && (
+                   <RegularPolygon x={currentElement.x} y={currentElement.y} sides={3} radius={(currentElement.width || currentElement.radius || 50)} stroke={currentElement.strokeColor} fill={currentElement.fillColor} strokeWidth={currentElement.strokeWidth} dash={getDashProps(currentElement.dashStyle, currentElement.strokeWidth)} />
+                )}
+                
+                {activeTool === 'select' && <Transformer ref={trRef} keepRatio={false} boundBoxFunc={(oldBox, newBox) => newBox.width < 5 || newBox.height < 5 ? oldBox : newBox} />}
               </Layer>
             </Stage>
           </div>
@@ -609,10 +756,10 @@ export default function Whiteboard({ roomId, username, onLeave }: WhiteboardProp
           <div className="absolute inset-0 z-20 pointer-events-none" style={{ transform: `translate(${stagePos.x}px, ${stagePos.y}px) scale(${stageScale})`, transformOrigin: '0 0' }}>
             {elements.map(el => {
               if (el.type === 'poll') {
-                return <PollWidget key={el.id} id={el.id} x={el.x} y={el.y} pollData={el.pollData!} scale={1/stageScale} currentUser={username} onUpdate={updateWidget} onDelete={deleteElement} />;
+                return <PollWidget key={el.id} id={el.id} x={el.x} y={el.y} pollData={el.pollData!} scale={stageScale} currentUser={username} onUpdate={updateWidget} onDelete={deleteElement} />;
               }
               if (el.type === 'graph') {
-                return <GraphWidget key={el.id} id={el.id} x={el.x} y={el.y} graphData={el.graphData!} scale={1/stageScale} onUpdate={updateWidget} onDelete={deleteElement} />;
+                return <GraphWidget key={el.id} id={el.id} x={el.x} y={el.y} graphData={el.graphData!} scale={stageScale} onUpdate={updateWidget} onDelete={deleteElement} />;
               }
               return null;
             })}
@@ -622,7 +769,8 @@ export default function Whiteboard({ roomId, username, onLeave }: WhiteboardProp
             
             <div className="flex flex-col gap-1">
               <span className="text-[0.6rem] font-bold text-slate-400 uppercase">Outline (Stroke)</span>
-              <div className="flex gap-1.5 flex-wrap w-[200px] h-10 overflow-y-auto custom-scrollbar">
+              <div className="flex gap-1.5 flex-wrap w-[200px] h-10 overflow-y-auto custom-scrollbar items-center">
+                <input type="color" value={strokeColor} onChange={(e) => setStrokeColor(e.target.value)} className="w-5 h-5 cursor-pointer shrink-0 border-0 p-0 rounded-full bg-transparent outline-none overflow-hidden" title="Custom color" />
                 {colors.map((c) => (
                   <button key={c} onClick={() => setStrokeColor(c)} className={`w-5 h-5 rounded-full transition-transform hover:scale-125 shrink-0 ${strokeColor === c ? 'shadow-[0_0_0_2px_white,0_0_0_3px_#4338ca] scale-125' : ''} ${c === 'transparent' || c === '#ffffff' ? 'border border-slate-300' : ''}`} style={{ backgroundColor: c !== 'transparent' ? c : '#f1f5f9', position: 'relative' }}>
                     {c === 'transparent' && <div className="absolute inset-0 w-full h-full border-t-2 border-red-500 transform rotate-45 rounded-full" />}
@@ -634,8 +782,9 @@ export default function Whiteboard({ roomId, username, onLeave }: WhiteboardProp
             <div className="w-px h-8 bg-slate-200 mx-1 hidden md:block"></div>
 
             <div className="flex flex-col gap-1">
-              <span className="text-[0.6rem] font-bold text-slate-400 uppercase">Fill</span>
-              <div className="flex gap-1.5 flex-wrap w-[200px] h-10 overflow-y-auto custom-scrollbar">
+              <span className="text-[0.6rem] font-bold text-slate-400 uppercase text-slate-800">Fill</span>
+              <div className="flex gap-1.5 flex-wrap w-[200px] h-10 overflow-y-auto custom-scrollbar items-center">
+                <input type="color" value={fillColor !== 'transparent' ? fillColor : '#000000'} onChange={(e) => setFillColor(e.target.value)} className="w-5 h-5 cursor-pointer shrink-0 border-0 p-0 rounded-full bg-transparent outline-none overflow-hidden" title="Custom fill" />
                 {colors.map((c) => (
                   <button key={c} onClick={() => setFillColor(c)} className={`w-5 h-5 rounded-full transition-transform hover:scale-125 shrink-0 ${fillColor === c ? 'shadow-[0_0_0_2px_white,0_0_0_3px_#4338ca] scale-125' : ''} ${c === 'transparent' || c === '#ffffff' ? 'border border-slate-300' : ''}`} style={{ backgroundColor: c !== 'transparent' ? c : '#f1f5f9', position: 'relative' }}>
                     {c === 'transparent' && <div className="absolute inset-0 w-full h-full border-t-2 border-red-500 transform rotate-45 rounded-full" />}
@@ -646,7 +795,16 @@ export default function Whiteboard({ roomId, username, onLeave }: WhiteboardProp
 
             <div className="w-px h-8 bg-slate-200 mx-1 hidden md:block"></div>
 
-            <div className="flex flex-col items-center gap-1 min-w-[100px]">
+            <div className="flex flex-col gap-1 min-w-[70px]">
+              <span className="text-[0.6rem] font-bold text-slate-400 uppercase">Brush Type</span>
+              <select value={brushType} onChange={(e: any) => { setBrushType(e.target.value); setActiveTool('pencil'); }} className="p-1 px-2 border border-slate-200 rounded-md text-[0.65rem] font-semibold text-slate-800 outline-none">
+                 <option value="marker">Marker</option>
+                 <option value="chisel">Chisel</option>
+                 <option value="neon">Neon</option>
+              </select>
+            </div>
+
+            <div className="flex flex-col items-center gap-1 min-w-[80px]">
               <span className="text-[0.6rem] font-bold text-slate-400 uppercase w-full flex justify-between">
                 <span>Thickness ({lineWidth}px)</span>
               </span>

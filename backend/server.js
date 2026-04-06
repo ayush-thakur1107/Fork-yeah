@@ -116,6 +116,16 @@ io.on("connection", (socket) => {
     socket.to(roomId).emit("clear");
   });
 
+  socket.on("state-replace", ({ roomId, elements }) => {
+    if (roomsData[roomId]) {
+      roomsData[roomId].objects = {};
+      elements.forEach(el => {
+         roomsData[roomId].objects[el.id] = el;
+      });
+      socket.to(roomId).emit("state-replace", elements);
+    }
+  });
+
   socket.on("chat-message", ({ roomId, message }) => {
     if (roomsData[roomId]) roomsData[roomId].chats.push(message);
     socket.to(roomId).emit("chat-message", message);
