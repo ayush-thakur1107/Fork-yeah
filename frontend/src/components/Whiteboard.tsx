@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { io, Socket } from 'socket.io-client';
 import {
-  LogOut, Trash2, Grid, MessageSquare, MousePointer2, PenTool, Highlighter, Triangle, Circle as CircleIcon, Square, Brush, Type, Eraser, Undo2, Redo2, MicOff, PhoneOff, Mic, Send, Copy, Upload, Download, Bell
+  LogOut, Trash2, Grid, MessageSquare, MousePointer2, PenTool, Highlighter, Triangle, Circle as CircleIcon, Square, Brush, Type, Eraser, Undo2, Redo2, MicOff, PhoneOff, Mic, Send, Copy, Upload, Download, Bell, Type as TextIcon, Hexagon, Star
 } from 'lucide-react';
 import { fabric } from 'fabric';
 
@@ -30,7 +30,8 @@ export default function Whiteboard({ roomId, username, onLeave }: WhiteboardProp
   const [color, setColor] = useState('#4338ca');
   const [lineWidth, setLineWidth] = useState(5);
   const [activeTool, setActiveTool] = useState('select');
-  const [shapeMode, setShapeMode] = useState<'rect' | 'circle' | 'triangle'>('rect');
+  const [shapeMode, setShapeMode] = useState<'rect' | 'circle' | 'triangle' | 'polygon'>('rect');
+  const [brushMode, setBrushMode] = useState<'paintbrush' | 'spray'>('paintbrush');
   
   const [userCount, setUserCount] = useState(1);
   const [isChatOpen, setIsChatOpen] = useState(true);
@@ -40,7 +41,12 @@ export default function Whiteboard({ roomId, username, onLeave }: WhiteboardProp
   // Voice Chat State
   const [isInVoice, setIsInVoice] = useState(false);
   const [isSpeaking, setIsSpeaking] = useState<{ [id: string]: { username: string, speaking: boolean } }>({});
-  const localStreamRef = useRef<MediaStream | null>(null);
+  const recognitionRef = useRef<any>(null); // For Web Speech API CC
+  const ccTimeoutsRef = useRef<{ [id: string]: ReturnType<typeof setTimeout> }>({});
+  const [ccText, setCcText] = useState<{ [id: string]: { username: string, text: string } }>({});
+
+  const isInVoiceRef = useRef(false);
+  useEffect(() => { isInVoiceRef.current = isInVoice; }, [isInVoice]);
 
   // Custom Alert Modal
   const [alertMsg, setAlertMsg] = useState('');
@@ -63,7 +69,7 @@ export default function Whiteboard({ roomId, username, onLeave }: WhiteboardProp
       height: containerRef.current.clientHeight,
       selection: true,
       preserveObjectStacking: true,
-      backgroundColor: 'transparent' // We have our grid div underneath
+      backgroundColor: 'transparent'
     });
 
     fabricRef.current = initCanvas;
@@ -72,10 +78,10 @@ export default function Whiteboard({ roomId, username, onLeave }: WhiteboardProp
     initCanvas.on('mouse:wheel', (opt) => {
       const e = opt.e as WheelEvent;
       if (e.ctrlKey || e.metaKey) {
-        // Zoom
+        // Zoom (Increased sensitivity to 0.99 instead of 0.999)
         e.preventDefault();
         let zoom = initCanvas.getZoom();
-        zoom *= 0.999 ** e.deltaY;
+        zoom *= 0.99 ** e.deltaY;
         if (zoom > 20) zoom = 20;
         if (zoom < 0.05) zoom = 0.05;
         initCanvas.zoomToPoint({ x: e.offsetX, y: e.offsetY }, zoom);
@@ -91,6 +97,15 @@ export default function Whiteboard({ roomId, username, onLeave }: WhiteboardProp
       }
     });
 
+    // Make eraser work correctly by deleting beneath it after stroke is finished
+    initCanvas.on('path:created', (opt) => {
+       if (activeTool === 'eraser') {
+         // This punches a hole exactly matching the path drawn through all objects on the canvas
+         (opt as any).path.globalCompositeOperation = 'destination-out';
+         initCanvas.renderAll();
+       }
+    });
+
     const newSocket = io(backendUrl);
     setSocket(newSocket);
 
@@ -98,14 +113,13 @@ export default function Whiteboard({ roomId, username, onLeave }: WhiteboardProp
       newSocket.emit('join-room', { roomId, username });
     });
 
-    // Sync load logic
     newSocket.on('load-state', (state: { objects: any[], chats: ChatMessage[], users: any }) => {
       setUserCount(Object.keys(state.users).length);
       setMessages(state.chats.map((c) => ({ ...c, isMe: c.user === username })) || []);
       
       if (state.objects && state.objects.length > 0) {
         isSyncingRef.current = true;
-        fabric.util.enlivensObjects(state.objects, (enlivenedObjects: fabric.Object[]) => {
+        fabric.util.enlivenObjects(state.objects, (enlivenedObjects: fabric.Object[]) => {
           enlivenedObjects.forEach(obj => initCanvas.add(obj));
           initCanvas.renderAll();
           isSyncingRef.current = false;
@@ -122,7 +136,7 @@ export default function Whiteboard({ roomId, username, onLeave }: WhiteboardProp
 
     newSocket.on('object-add', (objData: any) => {
       isSyncingRef.current = true;
-      fabric.util.enlivensObjects([objData], (enlivened: fabric.Object[]) => {
+      fabric.util.enlivenObjects([objData], (enlivened: fabric.Object[]) => {
         enlivened.forEach(obj => initCanvas.add(obj));
         initCanvas.renderAll();
         isSyncingRef.current = false;
@@ -158,21 +172,32 @@ export default function Whiteboard({ roomId, username, onLeave }: WhiteboardProp
       setMessages((prev) => [...prev, { ...msg, isMe: false }]);
     });
 
-    // Object mutation listeners to broadcast
+    newSocket.on('voice-cc', ({ socketId, username, text }) => {
+      setCcText(prev => ({ ...prev, [socketId]: { username, text } }));
+      
+      if (ccTimeoutsRef.current[socketId]) clearTimeout(ccTimeoutsRef.current[socketId]);
+      ccTimeoutsRef.current[socketId] = setTimeout(() => {
+        setCcText(prev => {
+           const next = {...prev};
+           delete next[socketId];
+           return next;
+        });
+      }, 4000);
+    });
+
     initCanvas.on('object:added', (e) => {
       if (isSyncingRef.current || !e.target) return;
       const obj = e.target as any;
       if (!obj.id) obj.id = generateId();
-      newSocket.emit('object-add', { roomId, obj: obj.toJSON(['id']) });
+      newSocket.emit('object-add', { roomId, obj: obj.toJSON(['id', 'globalCompositeOperation']) });
     });
 
     initCanvas.on('object:modified', (e) => {
       if (isSyncingRef.current || !e.target) return;
       const obj = e.target as any;
-      newSocket.emit('object-modify', { roomId, obj: obj.toJSON(['id']) });
+      newSocket.emit('object-modify', { roomId, obj: obj.toJSON(['id', 'globalCompositeOperation']) });
     });
 
-    // Resize Handler
     const handleResize = () => {
       if (containerRef.current) {
         initCanvas.setWidth(containerRef.current.clientWidth);
@@ -185,7 +210,10 @@ export default function Whiteboard({ roomId, username, onLeave }: WhiteboardProp
       newSocket.disconnect();
       initCanvas.dispose();
       window.removeEventListener('resize', handleResize);
-      if (localStreamRef.current) localStreamRef.current.getTracks().forEach(t => t.stop());
+      if (recognitionRef.current) {
+         try { recognitionRef.current.stop(); } catch(e) {}
+      }
+      Object.values(ccTimeoutsRef.current).forEach(clearTimeout);
     };
   }, [roomId, username, backendUrl]);
 
@@ -195,15 +223,11 @@ export default function Whiteboard({ roomId, username, onLeave }: WhiteboardProp
     const canvas = fabricRef.current;
     if (!canvas) return;
 
-    // Clear previous settings
     canvas.isDrawingMode = false;
     canvas.defaultCursor = 'default';
     canvas.selection = false;
-    
-    // Clear old mouse events
     canvas.off('mouse:down');
 
-    // Update settings based on active tool
     if (activeTool === 'select') {
       canvas.selection = true;
       canvas.forEachObject((o) => { o.selectable = true; o.evented = true; });
@@ -212,22 +236,28 @@ export default function Whiteboard({ roomId, username, onLeave }: WhiteboardProp
       canvas.forEachObject((o) => { o.selectable = false; o.evented = false; });
     }
 
-    if (activeTool === 'pencil' || activeTool === 'paintbrush' || activeTool === 'highlighter') {
+    if (activeTool === 'pencil' || activeTool === 'paintbrush' || activeTool === 'highlighter' || activeTool === 'eraser') {
       canvas.isDrawingMode = true;
+      
       if (activeTool === 'pencil') {
         canvas.freeDrawingBrush = new fabric.PencilBrush(canvas);
         canvas.freeDrawingBrush.color = color;
         canvas.freeDrawingBrush.width = lineWidth;
       } else if (activeTool === 'paintbrush') {
-        canvas.freeDrawingBrush = new fabric.SprayBrush(canvas);
+        if (brushMode === 'spray') canvas.freeDrawingBrush = new fabric.SprayBrush(canvas);
+        else canvas.freeDrawingBrush = new fabric.CircleBrush(canvas);
         canvas.freeDrawingBrush.color = color;
-        canvas.freeDrawingBrush.width = lineWidth * 2; // Paintbrush is thicker
+        canvas.freeDrawingBrush.width = lineWidth * 3;
       } else if (activeTool === 'highlighter') {
         canvas.freeDrawingBrush = new fabric.PencilBrush(canvas);
-        // Semi-transparent
         const alphaHex = Math.round(0.4 * 255).toString(16).padStart(2, '0');
         canvas.freeDrawingBrush.color = color.length === 7 ? color + alphaHex : color;
-        canvas.freeDrawingBrush.width = lineWidth * 3;
+        canvas.freeDrawingBrush.width = lineWidth * 4;
+      } else if (activeTool === 'eraser') {
+        // Create an eraser brush that deletes beneath it (handled by path:created applying destination-out)
+        canvas.freeDrawingBrush = new fabric.PencilBrush(canvas);
+        canvas.freeDrawingBrush.color = '#ffffff'; // Color is ignored due to destination-out, but must be opaque
+        canvas.freeDrawingBrush.width = lineWidth * 5; 
       }
     }
 
@@ -241,13 +271,14 @@ export default function Whiteboard({ roomId, username, onLeave }: WhiteboardProp
         switch (shapeMode) {
           case 'circle': shape = new fabric.Circle({ ...opts, radius: 50 }); break;
           case 'triangle': shape = new fabric.Triangle({ ...opts, width: 100, height: 100 }); break;
+          case 'polygon': shape = new fabric.Polygon([{x: 0, y: 50}, {x: 50, y: 0}, {x: 100, y: 50}, {x: 75, y: 100}, {x: 25, y: 100}], { ...opts }); break;
           case 'rect': default: shape = new fabric.Rect({ ...opts, width: 100, height: 100 }); break;
         }
         
         (shape as any).id = generateId();
         canvas.add(shape);
         canvas.setActiveObject(shape);
-        setActiveTool('select'); // auto-switch to select so they can jump to sizing it
+        setActiveTool('select');
       });
     }
 
@@ -266,33 +297,19 @@ export default function Whiteboard({ roomId, username, onLeave }: WhiteboardProp
         setActiveTool('select');
       });
     }
-
-    if (activeTool === 'eraser') {
-      // In object-based canvas, easiest eraser is clicking objects to delete them
-      canvas.defaultCursor = 'cell';
-      canvas.on('mouse:down', (opt) => {
-        if (opt.target) {
-          socket?.emit('object-remove', { roomId, id: (opt.target as any).id });
-          canvas.remove(opt.target);
-          canvas.discardActiveObject();
-          canvas.requestRenderAll();
-        }
-      });
-    }
-  }, [activeTool, color, lineWidth, shapeMode, socket, roomId]);
+  }, [activeTool, color, lineWidth, shapeMode, brushMode, socket, roomId]);
 
 
-  // Update drawing brush when color/line-width changes
   useEffect(() => {
     const canvas = fabricRef.current;
-    if (canvas && canvas.isDrawingMode && canvas.freeDrawingBrush) {
+    if (canvas && canvas.isDrawingMode && canvas.freeDrawingBrush && activeTool !== 'eraser') {
       if (activeTool === 'highlighter') {
         const alphaHex = Math.round(0.4 * 255).toString(16).padStart(2, '0');
         canvas.freeDrawingBrush.color = color.length === 7 ? color + alphaHex : color;
-        canvas.freeDrawingBrush.width = lineWidth * 3;
+        canvas.freeDrawingBrush.width = lineWidth * 4;
       } else {
         canvas.freeDrawingBrush.color = color;
-        canvas.freeDrawingBrush.width = activeTool === 'paintbrush' ? lineWidth * 2 : lineWidth;
+        canvas.freeDrawingBrush.width = activeTool === 'paintbrush' ? lineWidth * 3 : lineWidth;
       }
     }
   }, [color, lineWidth, activeTool]);
@@ -319,13 +336,12 @@ export default function Whiteboard({ roomId, username, onLeave }: WhiteboardProp
       canvas.discardActiveObject();
       canvas.requestRenderAll();
     } else {
-       showAlert("Select an object to erase it!");
+       showAlert("Select an object to delete it!");
     }
   };
 
   const handleExport = () => {
     if (!fabricRef.current) return;
-    // Export with background grid for style
     const dataUrl = fabricRef.current.toDataURL({ format: 'png', multiplier: 1 });
     const a = document.createElement('a');
     a.href = dataUrl;
@@ -355,11 +371,6 @@ export default function Whiteboard({ roomId, username, onLeave }: WhiteboardProp
     }
   };
 
-  const handleInvite = () => {
-    navigator.clipboard.writeText(roomId);
-    showAlert('Room ID copied to clipboard!');
-  };
-
   const handleSendMessage = (e: React.FormEvent) => {
     e.preventDefault();
     if (!newMessage.trim() || !socket) return;
@@ -371,18 +382,91 @@ export default function Whiteboard({ roomId, username, onLeave }: WhiteboardProp
 
   const toggleVoice = async () => {
     if (isInVoice) {
-      if (localStreamRef.current) localStreamRef.current.getTracks().forEach(t => t.stop());
       setIsInVoice(false);
       socket?.emit("voice-status", { roomId, isSpeaking: false });
+      
+      if (recognitionRef.current) {
+        try { recognitionRef.current.stop(); } catch(e){}
+      }
     } else {
+      const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+      if (!SpeechRecognition) {
+        showAlert("Live Captions are not supported in this browser. Please use Google Chrome.");
+        return;
+      }
+      
       try {
-        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-        localStreamRef.current = stream;
-        setIsInVoice(true);
-        socket?.emit("voice-status", { roomId, isSpeaking: true });
-        showAlert("Voice Chat Enabled");
+        const recognition = new SpeechRecognition();
+        recognition.continuous = true;
+        recognition.interimResults = true;
+        recognition.lang = 'en-US';
+        
+        recognition.onstart = () => {
+          setIsInVoice(true);
+        };
+
+        recognition.onspeechstart = () => socket?.emit("voice-status", { roomId, isSpeaking: true });
+        recognition.onspeechend = () => socket?.emit("voice-status", { roomId, isSpeaking: false });
+
+        recognition.onresult = (event: any) => {
+          let interimTranscript = '';
+          let finalTranscript = '';
+          for (let i = event.resultIndex; i < event.results.length; ++i) {
+            if (event.results[i].isFinal) finalTranscript += event.results[i][0].transcript;
+            else interimTranscript += event.results[i][0].transcript;
+          }
+          const transcript = finalTranscript || interimTranscript;
+          if (transcript.trim() !== '') {
+             socket?.emit("voice-cc", { roomId, text: transcript });
+             
+             // Update self locally
+             setCcText(prev => ({ ...prev, 'me': { username: 'You', text: transcript } }));
+             if (ccTimeoutsRef.current['me']) clearTimeout(ccTimeoutsRef.current['me']);
+             ccTimeoutsRef.current['me'] = setTimeout(() => {
+                setCcText(prev => {
+                   const next = {...prev};
+                   delete next['me'];
+                   return next;
+                });
+             }, 5000);
+          }
+        };
+
+        recognition.onerror = (e: any) => {
+           console.warn('Speech error:', e.error);
+           if (e.error === 'no-speech') return; // Ignore temporary silence errors
+           
+           if (e.error === 'not-allowed') {
+              showAlert("Microphone access was denied by your browser!");
+           } else if (e.error === 'audio-capture') {
+              showAlert("Microphone not found or is being used by another app.");
+           } else {
+              showAlert(`Live Captions Error: ${e.error}`);
+           }
+           
+           // Kill the engine on fatal errors so it doesn't loop
+           setIsInVoice(false);
+           isInVoiceRef.current = false;
+           socket?.emit("voice-status", { roomId, isSpeaking: false });
+        };
+        
+        recognition.onend = () => {
+           if (isInVoiceRef.current) { 
+              // Add delay to prevent instant endless loop if mic fails
+              setTimeout(() => {
+                 if (isInVoiceRef.current) {
+                    try { recognition.start(); } catch(e){}
+                 }
+              }, 1000);
+           }
+        };
+        
+        showAlert("Voice Chat Requested. Connecting to Mic...");
+        recognition.start();
+        recognitionRef.current = recognition;
       } catch (err) {
-        showAlert("Microphone access denied or not available.");
+        console.error(err);
+        showAlert("Failed to initialize Live Captions engine.");
       }
     }
   };
@@ -395,12 +479,10 @@ export default function Whiteboard({ roomId, username, onLeave }: WhiteboardProp
     return () => { socket.off("voice-status"); };
   }, [socket]);
 
-  // Handle keyboard deletes
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if ((e.key === 'Delete' || e.key === 'Backspace') && activeTool === 'select') {
         const activeObj = fabricRef.current?.getActiveObject();
-        // Prevent deleting if they are actively typing within an IText
         if (activeObj && activeObj.type === 'i-text' && (activeObj as fabric.IText).isEditing) return;
         deleteSelected();
       }
@@ -412,15 +494,18 @@ export default function Whiteboard({ roomId, username, onLeave }: WhiteboardProp
   const activeSpeakerId = Object.keys(isSpeaking).find(id => isSpeaking[id].speaking);
   const activeSpeaker = activeSpeakerId ? isSpeaking[activeSpeakerId] : null;
 
-  const colors = ['#000000', '#ef4444', '#f97316', '#eab308', '#10b981', '#06b6d4', '#3b82f6', '#8b5cf6', '#d946ef', '#ffffff'];
+  // Multiple Colors Palette (20 colors + native picker)
+  const colors = [
+    '#000000', '#ef4444', '#f97316', '#f59e0b', '#eab308', '#84cc16', '#22c55e', '#10b981', '#14b8a6', '#06b6d4', 
+    '#0ea5e9', '#3b82f6', '#6366f1', '#8b5cf6', '#a855f7', '#d946ef', '#f43f5e', '#64748b', '#94a3b8', '#ffffff'
+  ];
 
-  // Left Sidebar Tools definition
   const tools = [
     { id: 'select', icon: MousePointer2, label: 'Select' },
     { id: 'pencil', icon: PenTool, label: 'Pencil' },
     { id: 'paintbrush', icon: Brush, label: 'Paint' },
     { id: 'highlighter', icon: Highlighter, label: 'Highlight' },
-    { id: 'shapes', icon: shapeMode === 'rect' ? Square : shapeMode === 'circle' ? CircleIcon : Triangle, label: 'Shapes' },
+    { id: 'shapes', icon: shapeMode === 'rect' ? Square : shapeMode === 'circle' ? CircleIcon : shapeMode === 'polygon' ? Hexagon : Triangle, label: 'Shapes' },
     { id: 'text', icon: Type, label: 'Text' },
     { id: 'eraser', icon: Eraser, label: 'Eraser' },
   ];
@@ -428,12 +513,35 @@ export default function Whiteboard({ roomId, username, onLeave }: WhiteboardProp
   return (
     <div className="w-full h-full flex flex-col bg-white text-slate-800 font-sans relative">
       
-      {/* Custom Alert Toast Notification */}
       {alertMsg && (
-        <div className="absolute top-20 left-1/2 transform -translate-x-1/2 z-50 bg-slate-900 text-white px-6 py-3 rounded-full shadow-2xl flex items-center gap-3 animate-fade-in border border-slate-700">
+        <div className="absolute top-20 left-1/2 transform -translate-x-1/2 z-50 bg-slate-900 text-white px-6 py-3 rounded-full shadow-2xl flex items-center gap-3 animate-bounce border border-slate-700">
           <Bell size={18} className="text-indigo-400" />
           <span className="text-sm font-semibold">{alertMsg}</span>
         </div>
+      )}
+
+      {/* Closed Captions Dedicated Box */}
+      {isInVoice && (
+      <div className="absolute bottom-24 right-4 md:right-[340px] w-72 md:w-80 bg-slate-900/95 backdrop-blur-md rounded-2xl shadow-2xl z-40 flex flex-col border border-slate-700 overflow-hidden animate-fade-in pointer-events-auto">
+        <div className="bg-slate-800/80 px-4 py-2 border-b border-slate-700 flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+            <span className="text-[0.65rem] font-bold text-slate-300 uppercase tracking-widest">Live Transcript</span>
+          </div>
+        </div>
+        <div className="p-4 flex flex-col gap-3 max-h-48 overflow-y-auto min-h-[80px]">
+          {Object.keys(ccText).length === 0 ? (
+             <div className="text-slate-500 text-xs text-center font-medium my-auto italic">Waiting for speech...</div>
+          ) : (
+            Object.keys(ccText).map(id => (
+               <div key={id} className="flex flex-col bg-slate-800/50 p-2.5 rounded-xl border border-slate-700/50">
+                 <span className="text-[0.6rem] font-bold text-indigo-400 uppercase tracking-widest mb-1">{ccText[id].username}</span>
+                 <span className="text-sm font-medium text-slate-100 leading-snug">{ccText[id].text}</span>
+               </div>
+            ))
+          )}
+        </div>
+      </div>
       )}
 
       {/* Top Navbar */}
@@ -447,7 +555,7 @@ export default function Whiteboard({ roomId, username, onLeave }: WhiteboardProp
             </div>
             LiveCollab
           </div>
-          <div className="hidden sm:flex items-center gap-2 bg-slate-100/50 rounded-full py-1.5 px-3 border border-slate-200 hover:bg-slate-100 transition-colors cursor-pointer" onClick={handleInvite}>
+          <div className="hidden sm:flex items-center gap-2 bg-slate-100/50 rounded-full py-1.5 px-3 border border-slate-200 hover:bg-slate-100 transition-colors cursor-pointer" onClick={() => { navigator.clipboard.writeText(roomId); showAlert('Room ID Copied!'); }}>
             <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></div>
             <span className="text-sm font-semibold text-slate-700">{roomId}</span>
             <Copy size={14} className="ml-2 text-slate-400"/>
@@ -483,15 +591,24 @@ export default function Whiteboard({ roomId, username, onLeave }: WhiteboardProp
       <div className="flex flex-1 overflow-hidden relative">
         
         {/* Left Sidebar Toolbar */}
-        <aside className="w-[72px] border-r border-slate-200 bg-white shadow-[2px_0_15px_rgba(0,0,0,0.02)] flex flex-col items-center py-4 z-20 shrink-0 overflow-y-auto">
+        <aside className="w-[72px] border-r border-slate-200 bg-white shadow-[2px_0_15px_rgba(0,0,0,0.02)] flex flex-col items-center py-4 z-20 shrink-0 overflow-visible">
           <div className="flex flex-col gap-1 w-full px-2 relative">
             
             {/* Shape Cycle Popover Hint */}
             {activeTool === 'shapes' && (
-              <div className="absolute left-[70px] top-48 bg-slate-800 text-white p-2 rounded-xl text-xs font-semibold shadow-lg flex flex-col gap-2 z-50 animate-fade-in border border-slate-700">
+              <div className="absolute left-[70px] top-48 bg-slate-800 text-white p-2 rounded-xl text-xs font-semibold shadow-2xl flex flex-col gap-2 z-50 border border-slate-700 ml-2">
                 <button onClick={() => setShapeMode('rect')} className={`flex items-center gap-2 p-1.5 rounded-lg hover:bg-slate-700 ${shapeMode==='rect'?'text-indigo-400':''}`}><Square size={14}/> Rectangle</button>
                 <button onClick={() => setShapeMode('circle')} className={`flex items-center gap-2 p-1.5 rounded-lg hover:bg-slate-700 ${shapeMode==='circle'?'text-indigo-400':''}`}><CircleIcon size={14}/> Circle</button>
                 <button onClick={() => setShapeMode('triangle')} className={`flex items-center gap-2 p-1.5 rounded-lg hover:bg-slate-700 ${shapeMode==='triangle'?'text-indigo-400':''}`}><Triangle size={14}/> Triangle</button>
+                <button onClick={() => setShapeMode('polygon')} className={`flex items-center gap-2 p-1.5 rounded-lg hover:bg-slate-700 ${shapeMode==='polygon'?'text-indigo-400':''}`}><Hexagon size={14}/> Polygon</button>
+              </div>
+            )}
+
+            {/* Brush Popover Hint */}
+            {activeTool === 'paintbrush' && (
+              <div className="absolute left-[70px] top-[140px] bg-slate-800 text-white p-2 rounded-xl text-xs font-semibold shadow-2xl flex flex-col gap-2 z-50 border border-slate-700 ml-2">
+                <button onClick={() => setBrushMode('paintbrush')} className={`flex items-center gap-2 p-1.5 rounded-lg hover:bg-slate-700 ${brushMode==='paintbrush'?'text-indigo-400':''}`}><Brush size={14}/> Circle Brush</button>
+                <button onClick={() => setBrushMode('spray')} className={`flex items-center gap-2 p-1.5 rounded-lg hover:bg-slate-700 ${brushMode==='spray'?'text-indigo-400':''}`}><Star size={14}/> Spray Box</button>
               </div>
             )}
 
@@ -512,9 +629,9 @@ export default function Whiteboard({ roomId, username, onLeave }: WhiteboardProp
             
             <div className="w-8 mx-auto h-px bg-slate-200 my-2"></div>
             
-            <button onClick={toggleVoice} className={`flex flex-col items-center justify-center p-2 rounded-xl transition-colors ${isInVoice ? 'bg-emerald-100 text-emerald-600' : 'text-slate-500 hover:bg-slate-50'}`}>
+            <button onClick={toggleVoice} className={`flex flex-col items-center justify-center p-2 rounded-xl transition-colors ${isInVoice ? 'bg-emerald-100 text-emerald-600 shadow-sm' : 'text-slate-500 hover:bg-slate-50'}`}>
               {isInVoice ? <Mic size={20} /> : <MicOff size={20} />}
-              <span className="text-[0.6rem] mt-1 font-semibold">Voice</span>
+              <span className="text-[0.6rem] mt-1 font-semibold">Voice / CC</span>
             </button>
 
             <button onClick={handleClear} className="flex flex-col items-center justify-center mt-2 p-2 rounded-xl text-red-500 hover:bg-red-50 transition-colors" title="Clear Board">
@@ -531,7 +648,6 @@ export default function Whiteboard({ roomId, username, onLeave }: WhiteboardProp
                style={{ backgroundImage: 'radial-gradient(circle at 2px 2px, #cbd5e1 1px, transparent 0)', backgroundSize: '30px 30px' }}
           />
 
-          {/* Floating Voice Chat Pill */}
           {(isInVoice || activeSpeaker) && (
             <div className="absolute top-6 left-1/2 transform -translate-x-1/2 z-20 bg-white/90 backdrop-blur-md rounded-full shadow-[0_4px_25px_rgba(0,0,0,0.08)] border border-slate-100 flex items-center p-1.5 pl-3 pr-4 gap-4 animate-fade-in">
               <div className="flex items-center gap-3">
@@ -548,46 +664,46 @@ export default function Whiteboard({ roomId, username, onLeave }: WhiteboardProp
             </div>
           )}
 
-          {/* Core Fabric Canvas Container */}
           <div ref={containerRef} className="absolute inset-0 z-10 touch-none">
             <canvas ref={canvasElRef} className="absolute inset-0" />
-            
-            {/* Overlay hint if Pan/Zooming trackpad is active */}
             <div className="absolute top-4 left-4 pointer-events-none text-[0.65rem] font-bold text-slate-400 tracking-wider">
                CTRL / CMD + TRACKPAD SCROLL TO ZOOM
             </div>
           </div>
 
-          {/* Bottom Floating Toolbar */}
-          <div className="absolute bottom-8 left-1/2 transform -translate-x-1/2 z-20 bg-white/95 backdrop-blur-md rounded-full shadow-[0_8px_30px_rgba(0,0,0,0.12)] border border-slate-100 flex flex-wrap items-center justify-center py-2 px-4 gap-4">
-            <div className="flex gap-1.5 items-center bg-slate-50 p-1.5 rounded-full border border-slate-100">
+          <div className="absolute bottom-8 left-1/2 transform -translate-x-1/2 z-20 bg-white/95 backdrop-blur-md rounded-2xl shadow-[0_8px_30px_rgba(0,0,0,0.12)] border border-slate-100 flex flex-wrap items-center justify-center p-3 gap-4 max-w-[90%]">
+            <div className="grid grid-cols-10 sm:flex sm:flex-wrap gap-1.5 items-center justify-center w-[250px] sm:w-[350px]">
               {colors.map((c) => (
                 <button
                   key={c}
                   onClick={() => setColor(c)}
-                  className={`w-6 h-6 rounded-full transition-transform hover:scale-110 ${
-                    color === c ? 'shadow-[0_0_0_2px_white,0_0_0_4px_#4338ca] scale-110' : ''
+                  className={`w-6 h-6 rounded-full transition-transform hover:scale-125 ${
+                    color === c ? 'shadow-[0_0_0_2px_white,0_0_0_4px_#4338ca] scale-125' : ''
                   } ${c === '#ffffff' ? 'border border-slate-200' : ''}`}
                   style={{ backgroundColor: c }}
+                  title={c}
                 />
               ))}
+              <input type="color" className="w-6 h-6 p-0 border-0 rounded-full cursor-pointer overflow-hidden transform hover:scale-110 shadow-sm" aria-label="Custom Color Picker" onChange={(e) => setColor(e.target.value)} value={color} />
             </div>
             
-            <div className="w-px h-6 bg-slate-200 mx-1"></div>
+            <div className="w-px h-8 bg-slate-200 mx-1 hidden sm:block"></div>
 
-            <div className="flex items-center gap-3">
-              <div className="text-xs font-bold text-slate-500 uppercase">Width</div>
+            <div className="flex flex-col items-center gap-1 min-w-[100px]">
+              <div className="text-[0.65rem] font-bold text-slate-500 uppercase tracking-widest flex items-center justify-between w-full">
+                <span>Thickness</span>
+                <span className="text-indigo-600">{lineWidth}px</span>
+              </div>
               <input 
                 type="range" min="1" max="50" 
                 value={lineWidth} 
                 onChange={(e) => setLineWidth(Number(e.target.value))}
-                className="w-24 h-1.5 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-[#4338ca]"
+                className="w-full h-1.5 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-[#4338ca]"
               />
             </div>
           </div>
         </main>
 
-        {/* Right Sidebar - Team Chat */}
         {isChatOpen && (
           <aside className="w-80 bg-white shadow-[-2px_0_15px_rgba(0,0,0,0.02)] border-l border-slate-200 flex flex-col z-20 shrink-0 absolute md:relative right-0 h-full">
             <div className="p-4 border-b border-slate-200 flex items-center justify-between bg-white shadow-sm z-10">

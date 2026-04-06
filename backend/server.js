@@ -10,7 +10,6 @@ app.use(cors());
 const server = http.createServer(app);
 const io = new Server(server, { cors: { origin: "*", methods: ["GET", "POST"] } });
 
-// Store room state: { objects: { id: obj }, chats: [], users: {} }
 const roomsData = {};
 
 io.on("connection", (socket) => {
@@ -26,7 +25,6 @@ io.on("connection", (socket) => {
     }
     roomsData[roomId].users[socket.id] = { username: username || "Anonymous" };
     
-    // Load state
     socket.emit("load-state", {
       objects: Object.values(roomsData[roomId].objects),
       chats: roomsData[roomId].chats,
@@ -36,7 +34,6 @@ io.on("connection", (socket) => {
     socket.to(roomId).emit("user-joined", { socketId: socket.id, username });
   });
 
-  // Fabric Object Syncer
   socket.on("object-add", ({ roomId, obj }) => {
     if (roomsData[roomId]) roomsData[roomId].objects[obj.id] = obj;
     socket.to(roomId).emit("object-add", obj);
@@ -57,15 +54,17 @@ io.on("connection", (socket) => {
     socket.to(roomId).emit("clear");
   });
 
-  // Team Chat
   socket.on("chat-message", ({ roomId, message }) => {
     if (roomsData[roomId]) roomsData[roomId].chats.push(message);
     socket.to(roomId).emit("chat-message", message);
   });
 
-  // Voice WebRTC Status Mock
   socket.on("voice-status", ({ roomId, isSpeaking }) => {
     socket.to(roomId).emit("voice-status", { socketId: socket.id, isSpeaking, username: socket.username });
+  });
+
+  socket.on("voice-cc", ({ roomId, text }) => {
+    socket.to(roomId).emit("voice-cc", { socketId: socket.id, username: socket.username, text });
   });
 
   socket.on("disconnect", () => {
