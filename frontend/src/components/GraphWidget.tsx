@@ -12,6 +12,8 @@ export interface GraphWidgetProps {
   id: string;
   x: number;
   y: number;
+  width?: number;
+  height?: number;
   graphData: GraphData;
   scale: number;
   onUpdate: (id: string, newProps: any) => void;
@@ -20,7 +22,7 @@ export interface GraphWidgetProps {
 
 const COLORS = ['#4f46e5', '#ec4899', '#14b8a6', '#f59e0b', '#3b82f6', '#8b5cf6'];
 
-export default function GraphWidget({ id, x, y, graphData, scale, onUpdate, onDelete }: GraphWidgetProps) {
+export default function GraphWidget({ id, x, y, width, height, graphData, scale, onUpdate, onDelete }: GraphWidgetProps) {
   const [isEditing, setIsEditing] = useState(graphData.dataPoints.length === 0);
   const [tempTitle, setTempTitle] = useState(graphData.title || '');
   const [tempInput, setTempInput] = useState(
@@ -56,10 +58,18 @@ export default function GraphWidget({ id, x, y, graphData, scale, onUpdate, onDe
 
   return (
     <Rnd
-      size={{ width: 350, height: 350 }}
+      size={{ width: width || 350, height: height || 350 }}
       position={{ x, y }}
       onDragStop={(_e, d) => onUpdate(id, { x: d.x, y: d.y })}
-      enableResizing={false}
+      onResizeStop={(_e, _dir, ref, _delta, position) => {
+        onUpdate(id, {
+          width: parseInt(ref.style.width, 10),
+          height: parseInt(ref.style.height, 10),
+          x: position.x,
+          y: position.y
+        });
+      }}
+      enableResizing={true}
       scale={scale}
       cancel=".nodrag"
       className="absolute z-30"

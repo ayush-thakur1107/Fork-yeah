@@ -11,6 +11,8 @@ export interface PollWidgetProps {
   id: string;
   x: number;
   y: number;
+  width?: number;
+  height?: number;
   pollData: PollData;
   scale: number;
   currentUser: string;
@@ -18,7 +20,7 @@ export interface PollWidgetProps {
   onDelete: (id: string) => void;
 }
 
-export default function PollWidget({ id, x, y, pollData, scale, currentUser, onUpdate, onDelete }: PollWidgetProps) {
+export default function PollWidget({ id, x, y, width, height, pollData, scale, currentUser, onUpdate, onDelete }: PollWidgetProps) {
   const [isEditing, setIsEditing] = useState(!pollData.question);
   const [tempQuestion, setTempQuestion] = useState(pollData.question || '');
   const [tempOptions, setTempOptions] = useState<string[]>(
@@ -61,10 +63,18 @@ export default function PollWidget({ id, x, y, pollData, scale, currentUser, onU
 
   return (
     <Rnd
-      size={{ width: 300, height: 'auto' }}
+      size={{ width: width || 300, height: height || 'auto' }}
       position={{ x, y }}
       onDragStop={(_e, d) => onUpdate(id, { x: d.x, y: d.y })}
-      enableResizing={false}
+      onResizeStop={(_e, _dir, ref, _delta, position) => {
+        onUpdate(id, {
+          width: parseInt(ref.style.width, 10),
+          height: parseInt(ref.style.height, 10) || undefined,
+          x: position.x,
+          y: position.y
+        });
+      }}
+      enableResizing={true}
       scale={scale}
       cancel=".nodrag"
       className="absolute z-30"

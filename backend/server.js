@@ -188,6 +188,41 @@ io.on("connection", (socket) => {
     ).exec();
   });
 
+  socket.on("object-remove", ({ roomId, id }) => {
+    if (roomsData[roomId]) delete roomsData[roomId].objects[id];
+    socket.to(roomId).emit("object-remove", id);
+    
+    Room.updateOne(
+      { roomId },
+      { elements: Object.values(roomsData[roomId]?.objects || {}) }
+    ).exec();
+  });
+
+  socket.on("clear", (roomId) => {
+    if (roomsData[roomId]) roomsData[roomId].objects = {};
+    socket.to(roomId).emit("clear");
+    
+    Room.updateOne(
+      { roomId },
+      { elements: [] }
+    ).exec();
+  });
+
+  socket.on("state-replace", ({ roomId, elements }) => {
+    if (roomsData[roomId]) {
+      roomsData[roomId].objects = {};
+      elements.forEach(el => {
+        roomsData[roomId].objects[el.id] = el;
+      });
+      socket.to(roomId).emit("state-replace", elements);
+      
+      Room.updateOne(
+        { roomId },
+        { elements: Object.values(roomsData[roomId].objects) }
+      ).exec();
+    }
+  });
+
   // =======================
   // CHAT
   // =======================

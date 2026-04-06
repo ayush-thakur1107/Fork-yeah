@@ -826,10 +826,10 @@ export default function Whiteboard({ roomId, username, onLeave }: WhiteboardProp
           <div className="absolute inset-0 z-20 pointer-events-none" style={{ transform: `translate(${stagePos.x}px, ${stagePos.y}px) scale(${stageScale})`, transformOrigin: '0 0' }}>
             {elements.map(el => {
               if (el.type === 'poll') {
-                return <PollWidget key={el.id} id={el.id} x={el.x} y={el.y} pollData={el.pollData!} scale={stageScale} currentUser={username} onUpdate={updateWidget} onDelete={deleteElement} />;
+                return <PollWidget key={el.id} id={el.id} x={el.x} y={el.y} width={el.width} height={el.height} pollData={el.pollData!} scale={stageScale} currentUser={username} onUpdate={updateWidget} onDelete={deleteElement} />;
               }
               if (el.type === 'graph') {
-                return <GraphWidget key={el.id} id={el.id} x={el.x} y={el.y} graphData={el.graphData!} scale={stageScale} onUpdate={updateWidget} onDelete={deleteElement} />;
+                return <GraphWidget key={el.id} id={el.id} x={el.x} y={el.y} width={el.width} height={el.height} graphData={el.graphData!} scale={stageScale} onUpdate={updateWidget} onDelete={deleteElement} />;
               }
               return null;
             })}
