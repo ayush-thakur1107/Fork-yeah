@@ -1,140 +1,263 @@
-import { useState } from 'react';
-import { Layers, Users, PenTool } from 'lucide-react';
+import { useState, useEffect } from 'react';
+import { Layers, Users, PenTool, Zap, ArrowRight } from 'lucide-react';
 
 interface LobbyProps {
   onJoin: (roomId: string, username: string) => void;
+  defaultUsername?: string;
 }
 
-export default function Lobby({ onJoin }: LobbyProps) {
+export default function Lobby({ onJoin, defaultUsername = '' }: LobbyProps) {
   const [roomId, setRoomId] = useState('');
-  const [username, setUsername] = useState('');
+  const [username, setUsername] = useState(defaultUsername);
+
+  // Sync if defaultUsername loads after component mounts (OAuth redirect case)
+  useEffect(() => {
+    if (defaultUsername) {
+      setUsername(defaultUsername);
+    }
+  }, [defaultUsername]);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     const finalRoomId = roomId.trim() || `room-${Math.random().toString(36).substring(2, 9)}`;
     const finalUsername = username.trim() || 'Anonymous';
-
     onJoin(finalRoomId, finalUsername);
   };
 
   return (
-    <div className="w-full h-full min-h-screen bg-[#0f172a] bg-gradient-to-br from-[#0f172a] via-[#1e1b4b] to-[#0f172a] flex text-slate-100 overflow-hidden relative">
+    <div className="w-full h-full min-h-screen bg-[#060910] flex text-slate-100 overflow-hidden relative">
 
-      {/* Animated Neon Glowing Entities */}
-      <div className="absolute inset-0 overflow-hidden pointer-events-none opacity-40 z-0">
-        <div className="absolute top-[30%] left-[-20%] w-[150%] h-[3px] bg-gradient-to-r from-transparent via-cyan-400 to-transparent blur-[4px] glow-float-1 rotate-12"></div>
-        <div className="absolute top-[70%] left-[-10%] w-[120%] h-[4px] bg-gradient-to-r from-transparent via-[#4f46e5] to-transparent blur-[5px] glow-float-2 -rotate-[8deg]"></div>
-        <div className="absolute top-[80%] left-[-30%] w-[140%] h-[3px] bg-gradient-to-r from-transparent via-fuchsia-400 to-transparent blur-[4px] glow-float-3 rotate-[24deg]"></div>
-      </div>
+      {/* Background grid */}
+      <div
+        className="absolute inset-0 z-0 opacity-[0.04]"
+        style={{
+          backgroundImage: `
+            linear-gradient(rgba(99,102,241,0.8) 1px, transparent 1px),
+            linear-gradient(90deg, rgba(99,102,241,0.8) 1px, transparent 1px)
+          `,
+          backgroundSize: '60px 60px'
+        }}
+      />
+
+      {/* Glow orbs */}
+      <div className="absolute top-[-20%] left-[10%] w-[500px] h-[500px] rounded-full bg-indigo-600/10 blur-[120px] z-0" />
+      <div className="absolute bottom-[-10%] right-[5%] w-[400px] h-[400px] rounded-full bg-cyan-500/8 blur-[100px] z-0" />
+      <div className="absolute top-[50%] left-[40%] w-[300px] h-[300px] rounded-full bg-violet-600/6 blur-[80px] z-0" />
+
       <style>{`
-        @keyframes flowRight {
-          0% { transform: translateY(0) rotate(12deg) scaleX(1); opacity: 0.3; }
-          50% { transform: translateY(-30px) rotate(14deg) scaleX(1.1); opacity: 0.8; }
-          100% { transform: translateY(0) rotate(12deg) scaleX(1); opacity: 0.3; }
+        @import url('https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=DM+Sans:wght@300;400;500&display=swap');
+
+        .lobby-font { font-family: 'Syne', sans-serif; }
+        .body-font { font-family: 'DM Sans', sans-serif; }
+
+        @keyframes fadeUp {
+          from { opacity: 0; transform: translateY(24px); }
+          to { opacity: 1; transform: translateY(0); }
         }
-        @keyframes flowLeft {
-          0% { transform: translateY(0) rotate(-8deg) translateX(-50px); opacity: 0.2; }
-          50% { transform: translateY(40px) rotate(-10deg) translateX(50px); opacity: 0.6; }
-          100% { transform: translateY(0) rotate(-8deg) translateX(-50px); opacity: 0.2; }
+        @keyframes fadeIn {
+          from { opacity: 0; }
+          to { opacity: 1; }
         }
-        @keyframes floatDiag {
-          0% { transform: translateY(0) rotate(24deg) scale(0.9); opacity: 0.2; }
-          50% { transform: translateY(-50px) rotate(22deg) scale(1.05); opacity: 0.7; }
-          100% { transform: translateY(0) rotate(24deg) scale(0.9); opacity: 0.2; }
+        @keyframes scanline {
+          0% { transform: translateY(-100%); }
+          100% { transform: translateY(100vh); }
         }
-        .glow-float-1 { animation: flowRight 6s ease-in-out infinite; }
-        .glow-float-2 { animation: flowLeft 8s ease-in-out infinite; }
-        .glow-float-3 { animation: floatDiag 7s ease-in-out infinite; }
+        .anim-1 { animation: fadeUp 0.6s ease forwards; opacity: 0; }
+        .anim-2 { animation: fadeUp 0.6s 0.1s ease forwards; opacity: 0; }
+        .anim-3 { animation: fadeUp 0.6s 0.2s ease forwards; opacity: 0; }
+        .anim-4 { animation: fadeUp 0.6s 0.3s ease forwards; opacity: 0; }
+        .anim-5 { animation: fadeUp 0.6s 0.4s ease forwards; opacity: 0; }
+        .anim-6 { animation: fadeIn 0.8s 0.5s ease forwards; opacity: 0; }
+
+        .scan-line {
+          position: absolute;
+          left: 0; right: 0;
+          height: 1px;
+          background: linear-gradient(90deg, transparent, rgba(99,102,241,0.3), transparent);
+          animation: scanline 8s linear infinite;
+          pointer-events: none;
+          z-index: 1;
+        }
+
+        .card-hover {
+          transition: all 0.3s ease;
+        }
+        .card-hover:hover {
+          border-color: rgba(99,102,241,0.3);
+          background: rgba(99,102,241,0.06);
+          transform: translateY(-2px);
+        }
+
+        .input-field {
+          background: rgba(255,255,255,0.03);
+          border: 1px solid rgba(255,255,255,0.08);
+          transition: all 0.2s ease;
+        }
+        .input-field:focus {
+          background: rgba(99,102,241,0.06);
+          border-color: rgba(99,102,241,0.5);
+          box-shadow: 0 0 0 3px rgba(99,102,241,0.08);
+          outline: none;
+        }
+
+        .join-btn {
+          background: linear-gradient(135deg, #4f46e5, #6366f1);
+          transition: all 0.2s ease;
+          position: relative;
+          overflow: hidden;
+        }
+        .join-btn::after {
+          content: '';
+          position: absolute;
+          inset: 0;
+          background: linear-gradient(135deg, rgba(255,255,255,0.1), transparent);
+          opacity: 0;
+          transition: opacity 0.2s;
+        }
+        .join-btn:hover::after { opacity: 1; }
+        .join-btn:hover {
+          box-shadow: 0 8px 30px rgba(99,102,241,0.4);
+          transform: translateY(-1px);
+        }
+        .join-btn:active { transform: translateY(0); }
+
+        .oauth-btn {
+          background: rgba(255,255,255,0.04);
+          border: 1px solid rgba(255,255,255,0.08);
+          transition: all 0.2s ease;
+        }
+        .oauth-btn:hover {
+          background: rgba(255,255,255,0.08);
+          border-color: rgba(255,255,255,0.15);
+        }
+
+        .tag {
+          background: rgba(99,102,241,0.1);
+          border: 1px solid rgba(99,102,241,0.2);
+          color: #818cf8;
+        }
+
+        .prefilled {
+          border-color: rgba(34,197,94,0.4) !important;
+          background: rgba(34,197,94,0.04) !important;
+        }
       `}</style>
 
-      <div className="w-full max-w-7xl mx-auto flex flex-col lg:flex-row items-center justify-center px-6 py-12 lg:py-20 lg:px-12 gap-12 lg:gap-24 relative z-10">
+      <div className="scan-line" />
 
-        {/* Left Side: Hero Text & Features */}
-        <div className="flex-1 w-full max-w-xl self-center pt-8 lg:pt-0">
-          <div className="flex items-center gap-2 text-[#4f46e5] font-bold text-2xl mb-8">
-            <div className="w-10 h-10 bg-[#4f46e5] rounded-xl flex items-center justify-center text-white">
-              <Layers size={22} fill="currentColor" />
+      <div className="w-full max-w-7xl mx-auto flex flex-col lg:flex-row items-center justify-center px-6 py-12 lg:py-0 gap-16 lg:gap-32 relative z-10 lobby-font">
+
+        {/* Left — Hero */}
+        <div className="flex-1 w-full max-w-lg">
+          <div className="anim-1 flex items-center gap-3 mb-10">
+            <div className="w-9 h-9 rounded-xl bg-indigo-600 flex items-center justify-center shadow-[0_0_20px_rgba(99,102,241,0.5)]">
+              <Layers size={18} className="text-white" />
             </div>
-            LiveCollab
+            <span className="text-white font-bold text-lg tracking-tight">LiveCollab</span>
+            <span className="tag text-[10px] font-bold px-2 py-0.5 rounded-full tracking-widest uppercase ml-1">Beta</span>
           </div>
 
-          <h1 className="text-5xl lg:text-6xl font-[800] leading-[1.1] tracking-tight text-white mb-6">
-            Where ideas find <br />
-            <span className="text-cyan-400">their perfect form.</span>
+          <h1 className="anim-2 text-5xl lg:text-[3.6rem] font-[800] leading-[1.05] tracking-tight text-white mb-6">
+            Where ideas find<br />
+            <span className="text-transparent bg-clip-text bg-gradient-to-r from-cyan-400 to-indigo-400">
+              their perfect form.
+            </span>
           </h1>
 
-          <p className="text-slate-300 text-lg lg:text-xl font-medium leading-relaxed mb-12 max-w-md">
-            A premium, real-time collaborative whiteboard built purely for our hackathon project. No fluff, just creation.
+          <p className="anim-3 body-font text-slate-400 text-base leading-relaxed mb-12 max-w-sm font-light">
+            Real-time collaborative whiteboard for teams who build fast. Join a room, start drawing.
           </p>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
-            <div className="bg-slate-800/40 backdrop-blur-md rounded-2xl p-6 shadow-[0_8px_30px_rgba(0,0,0,0.2)] border border-slate-700/50 hover:shadow-[0_8px_30px_rgba(34,211,238,0.1)] transition-all">
-              <Users size={24} className="text-cyan-400 mb-4" />
-              <h3 className="font-bold text-white mb-3 text-[1.05rem]">Real-time Presence</h3>
-              <p className="text-slate-400 text-sm leading-relaxed font-medium">
-                See every stroke, every thought, every collaborator instantly.
-              </p>
-            </div>
-            <div className="bg-slate-800/40 backdrop-blur-md rounded-2xl p-6 shadow-[0_8px_30px_rgba(0,0,0,0.2)] border border-slate-700/50 hover:shadow-[0_8px_30px_rgba(79,70,229,0.1)] transition-all">
-              <PenTool size={24} className="text-[#4f46e5] mb-4" />
-              <h3 className="font-bold text-white mb-3 text-[1.05rem]">Infinite Canvas</h3>
-              <p className="text-slate-400 text-sm leading-relaxed font-medium">
-                Unbounded space for your biggest ideas and wildest sketches.
-              </p>
-            </div>
+          <div className="anim-4 grid grid-cols-1 sm:grid-cols-3 gap-3">
+            {[
+              { icon: Users, label: 'Live Presence', desc: 'See collaborators in real time' },
+              { icon: PenTool, label: 'Infinite Canvas', desc: 'Unbounded creative space' },
+              { icon: Zap, label: 'Instant Sync', desc: 'Zero-lag drawing updates' },
+            ].map(({ icon: Icon, label, desc }) => (
+              <div
+                key={label}
+                className="card-hover rounded-2xl p-4 border border-white/[0.06] bg-white/[0.02] cursor-default"
+              >
+                <Icon size={18} className="text-indigo-400 mb-3" />
+                <div className="text-white font-semibold text-sm mb-1">{label}</div>
+                <div className="body-font text-slate-500 text-xs leading-relaxed font-light">{desc}</div>
+              </div>
+            ))}
           </div>
         </div>
 
-        {/* Right Side: Join Box */}
-        <div className="w-full max-w-[460px] pb-24 lg:pb-0">
-          <div className="bg-slate-900/60 backdrop-blur-xl rounded-[2rem] p-10 shadow-[0_20px_60px_-15px_rgba(0,0,0,0.3)] border border-slate-700/50 relative">
-            <h2 className="text-2xl font-bold text-white mb-2">Join your workspace</h2>
-            <p className="text-slate-400 text-sm font-medium mb-8">Ready to build? Please enter your details.</p>
+        {/* Right — Join Box */}
+        <div className="w-full max-w-[420px] anim-5">
+          <div
+            className="rounded-[28px] p-8 relative"
+            style={{
+              background: 'rgba(255,255,255,0.02)',
+              border: '1px solid rgba(255,255,255,0.07)',
+              boxShadow: '0 40px 80px rgba(0,0,0,0.4), inset 0 1px 0 rgba(255,255,255,0.05)'
+            }}
+          >
+            {/* Corner accent */}
+            <div className="absolute top-0 right-0 w-32 h-32 rounded-[28px] overflow-hidden pointer-events-none">
+              <div className="absolute top-0 right-0 w-full h-full bg-gradient-to-bl from-indigo-500/10 to-transparent" />
+            </div>
 
-            <form onSubmit={handleSubmit} className="space-y-6">
+            <h2 className="text-xl font-bold text-white mb-1">Join your workspace</h2>
+            <p className="body-font text-slate-500 text-sm mb-7 font-light">Enter your details to start collaborating.</p>
+
+            <form onSubmit={handleSubmit} className="space-y-4">
               <div>
-                <label className="block text-[0.8rem] font-bold text-slate-300 mb-2">Your Name</label>
+                <div className="flex items-center justify-between mb-2">
+                  <label className="text-[11px] font-bold text-slate-400 tracking-widest uppercase">Your Name</label>
+                  {defaultUsername && (
+                    <span className="text-[10px] text-emerald-400 font-semibold flex items-center gap-1">
+                      <span className="w-1.5 h-1.5 bg-emerald-400 rounded-full inline-block" />
+                      Auto-filled
+                    </span>
+                  )}
+                </div>
                 <input
                   type="text"
                   required
                   value={username}
                   onChange={(e) => setUsername(e.target.value)}
-                  className="w-full bg-slate-800/50 border border-slate-700 focus:border-cyan-400/50 focus:bg-slate-800 rounded-xl px-4 py-3 text-white placeholder-slate-500 focus:outline-none focus:ring-4 focus:ring-cyan-400/10 transition-all font-medium text-[0.95rem]"
+                  className={`input-field w-full rounded-xl px-4 py-3 text-white placeholder-slate-600 text-sm body-font ${defaultUsername ? 'prefilled' : ''}`}
                   placeholder="e.g. Alex"
                 />
               </div>
 
               <div>
-                <label className="block text-[0.8rem] font-bold text-slate-300 mb-2">Room ID</label>
+                <label className="block text-[11px] font-bold text-slate-400 tracking-widest uppercase mb-2">Room ID</label>
                 <input
                   type="text"
                   value={roomId}
                   onChange={(e) => setRoomId(e.target.value)}
-                  className="w-full bg-slate-800/50 border border-slate-700 focus:border-[#4f46e5]/50 focus:bg-slate-800 rounded-xl px-4 py-3 text-white placeholder-slate-500 focus:outline-none focus:ring-4 focus:ring-[#4f46e5]/10 transition-all font-medium text-[0.95rem]"
-                  placeholder="e.g. hackathon-alpha (leave empty for random)"
+                  className="input-field w-full rounded-xl px-4 py-3 text-white placeholder-slate-600 text-sm body-font"
+                  placeholder="Leave empty for a random room"
                 />
               </div>
 
               <button
                 type="submit"
-                className="w-full bg-[#4f46e5] hover:bg-[#4338ca] text-white font-semibold py-3.5 px-4 rounded-xl transition-all shadow-[0_8px_20px_rgba(79,70,229,0.25)] hover:shadow-[0_8px_20px_rgba(79,70,229,0.4)] text-[0.95rem]"
+                className="join-btn w-full text-white font-bold py-3.5 px-4 rounded-xl flex items-center justify-center gap-2 text-sm mt-2"
               >
                 Join Room
+                <ArrowRight size={16} />
               </button>
             </form>
 
-            <div className="mt-8 flex items-center justify-center space-x-4">
-              <div className="flex-1 h-px bg-slate-100"></div>
-              <span className="text-xs font-bold text-slate-300 tracking-wider">OR CONTINUE WITH</span>
-              <div className="flex-1 h-px bg-slate-100"></div>
+            <div className="my-6 flex items-center gap-3">
+              <div className="flex-1 h-px bg-white/[0.06]" />
+              <span className="text-[10px] font-bold text-slate-600 tracking-widest uppercase">or continue with</span>
+              <div className="flex-1 h-px bg-white/[0.06]" />
             </div>
 
-            <div className="mt-6 flex gap-4">
+            <div className="flex gap-3">
               <button
                 type="button"
                 onClick={() => window.location.href = "https://fork-yeah-backend.onrender.com/auth/google"}
-                className="flex-1 bg-[#f8f9fc] hover:bg-slate-100 text-slate-700 font-semibold py-3 px-4 rounded-xl transition-colors flex justify-center items-center gap-2 text-[0.95rem]">
-                <svg className="w-5 h-5" viewBox="0 0 24 24">
+                className="oauth-btn flex-1 rounded-xl py-3 px-4 flex items-center justify-center gap-2 text-sm font-semibold text-slate-300 body-font"
+              >
+                <svg className="w-4 h-4 shrink-0" viewBox="0 0 24 24">
                   <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.09-1.92 3.28-4.74 3.28-8.09z" />
                   <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" />
                   <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" />
@@ -145,26 +268,26 @@ export default function Lobby({ onJoin }: LobbyProps) {
               <button
                 type="button"
                 onClick={() => window.location.href = "https://fork-yeah-backend.onrender.com/auth/github"}
-                className="flex-1 bg-[#f8f9fc] hover:bg-slate-100 text-slate-700 font-semibold py-3 px-4 rounded-xl transition-colors flex justify-center items-center gap-2 text-[0.95rem]">
-                <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
+                className="oauth-btn flex-1 rounded-xl py-3 px-4 flex items-center justify-center gap-2 text-sm font-semibold text-slate-300 body-font"
+              >
+                <svg className="w-4 h-4 shrink-0" fill="currentColor" viewBox="0 0 24 24">
                   <path fillRule="evenodd" clipRule="evenodd" d="M12 2C6.477 2 2 6.484 2 12.017c0 4.425 2.865 8.18 6.839 9.504.5.092.682-.217.682-.483 0-.237-.008-.868-.013-1.703-2.782.605-3.369-1.343-3.369-1.343-.454-1.158-1.11-1.466-1.11-1.466-.908-.62.069-.608.069-.608 1.003.07 1.531 1.032 1.531 1.032.892 1.53 2.341 1.088 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.113-4.555-4.951 0-1.093.39-1.988 1.029-2.688-.103-.253-.446-1.272.098-2.65 0 0 .84-.27 2.75 1.026A9.564 9.564 0 0112 6.844c.85.004 1.705.115 2.504.337 1.909-1.296 2.747-1.027 2.747-1.027.546 1.379.202 2.398.1 2.651.64.7 1.028 1.595 1.028 2.688 0 3.848-2.339 4.695-4.566 4.943.359.309.678.92.678 1.855 0 1.338-.012 2.419-.012 2.747 0 .268.18.58.688.482A10.019 10.019 0 0022 12.017C22 6.484 17.522 2 12 2z" />
                 </svg>
                 GitHub
               </button>
             </div>
 
-            <p className="text-center text-sm font-semibold text-slate-500 mt-8">
-              New to LiveCollab? <a href="#" className="text-[#4f46e5] hover:underline">Create an account</a>
+            <p className="body-font text-center text-xs text-slate-600 mt-6 font-light">
+              By joining, you agree to our{' '}
+              <a href="#" className="text-indigo-400 hover:text-indigo-300 transition-colors">Terms</a>
+              {' '}and{' '}
+              <a href="#" className="text-indigo-400 hover:text-indigo-300 transition-colors">Privacy Policy</a>
             </p>
           </div>
-        </div>
 
-      </div>
-
-      {/* Footer / Bottom Elements */}
-      <div className="absolute bottom-6 left-0 right-0 max-w-7xl mx-auto px-12 flex justify-center items-center z-10 pointer-events-none">
-        <div className="hidden lg:flex gap-8 text-[0.7rem] font-bold tracking-widest text-slate-500 pointer-events-auto">
-          <div className="uppercase">Hackathon Project Demo</div>
+          <p className="anim-6 body-font text-center text-xs text-slate-700 mt-5 font-light">
+            Hackathon Project Demo · Built with ❤️
+          </p>
         </div>
       </div>
     </div>
