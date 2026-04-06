@@ -41,25 +41,17 @@ export default function GraphWidget({ id, x, y, width, height, graphData, scale,
   };
 
   const handleSave = () => {
-    if (!tempTitle.trim() || !tempInput.trim()) return;
-    
-    // Parse input "Apples:10, Bananas:20"
-    const parsedData = tempInput.split(',').map(item => {
-      const parts = item.split(':');
-      if (parts.length === 2) {
-        return { name: parts[0].trim(), value: parseFloat(parts[1].trim()) || 0 };
-      }
-      return { name: item.trim(), value: 1 };
-    }).filter(d => d.name);
-
-    onUpdate(id, {
-      graphData: {
-        title: tempTitle,
-        type: tempType,
-        dataPoints: parsedData
-      }
-    });
     setIsEditing(false);
+  };
+
+  const liveUpdate = (newTitle: string, newType: 'bar' | 'pie', newInput: string) => {
+    const pts = newInput.split(',').filter(s => s.trim() !== '').map(s => {
+      const [name, val] = s.split(':');
+      return { name: name?.trim() || '?', value: parseFloat(val) || 0 };
+    });
+    onUpdate(id, {
+      graphData: { ...graphData, title: newTitle, type: newType, dataPoints: pts }
+    });
   };
 
   return (
@@ -95,17 +87,26 @@ export default function GraphWidget({ id, x, y, width, height, graphData, scale,
                 className="border border-slate-200 rounded px-2 py-1.5 text-sm font-semibold text-slate-800 focus:outline-pink-500"
                 placeholder="Graph Title"
                 value={tempTitle}
-                onChange={e => setTempTitle(e.target.value)}
+                onChange={e => {
+                  setTempTitle(e.target.value);
+                  liveUpdate(e.target.value, tempType, tempInput);
+                }}
               />
               
               <div className="flex gap-2">
                 <button 
                   className={`flex-1 py-1 text-sm rounded font-semibold ${tempType === 'bar' ? 'bg-pink-100 text-pink-700 border border-pink-200' : 'bg-slate-100 text-slate-600'}`}
-                  onClick={() => setTempType('bar')}
+                  onClick={() => {
+                    setTempType('bar');
+                    liveUpdate(tempTitle, 'bar', tempInput);
+                  }}
                 >Bar</button>
                 <button 
                   className={`flex-1 py-1 text-sm rounded font-semibold ${tempType === 'pie' ? 'bg-pink-100 text-pink-700 border border-pink-200' : 'bg-slate-100 text-slate-600'}`}
-                  onClick={() => setTempType('pie')}
+                  onClick={() => {
+                    setTempType('pie');
+                    liveUpdate(tempTitle, 'pie', tempInput);
+                  }}
                 >Pie</button>
               </div>
 
@@ -113,7 +114,10 @@ export default function GraphWidget({ id, x, y, width, height, graphData, scale,
                 className="border border-slate-200 rounded px-2 py-1.5 text-sm text-slate-800 focus:outline-pink-500 resize-none h-24"
                 placeholder="Data format: Name:Value, Name:Value&#10;e.g. Yes:10, No:5, Maybe:2"
                 value={tempInput}
-                onChange={e => setTempInput(e.target.value)}
+                onChange={e => {
+                  setTempInput(e.target.value);
+                  liveUpdate(tempTitle, tempType, e.target.value);
+                }}
               />
               
               <button

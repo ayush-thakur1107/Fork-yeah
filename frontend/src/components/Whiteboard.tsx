@@ -105,6 +105,9 @@ export default function Whiteboard({ roomId, username, onLeave }: WhiteboardProp
   const [ccText, setCcText] = useState<{ [id: string]: { username: string, text: string } }>({});
 
   const isInVoiceRef = useRef(false);
+  const peersRef = useRef<{ [socketId: string]: RTCPeerConnection }>({});
+  const localStreamRef = useRef<MediaStream | null>(null);
+  const connectedUsersRef = useRef<{ [socketId: string]: { username: string } }>({});
   useEffect(() => { isInVoiceRef.current = isInVoice; }, [isInVoice]);
 
   const [alertMsg, setAlertMsg] = useState('');
@@ -202,6 +205,7 @@ export default function Whiteboard({ roomId, username, onLeave }: WhiteboardProp
 
     newSocket.on("load-state", (state: any) => {
       setUserCount(Object.keys(state.users).length);
+      connectedUsersRef.current = state.users || {};
       setMessages(state.chats.map((c: any) => ({
         ...c,
         isMe: c.user === username
@@ -226,12 +230,22 @@ export default function Whiteboard({ roomId, username, onLeave }: WhiteboardProp
       }));
     });
 
-    newSocket.on('user-joined', ({ username: uName }) => {
+    newSocket.on('user-joined', ({ socketId, username: uName }: any) => {
       setUserCount((c) => c + 1);
+      connectedUsersRef.current[socketId] = { username: uName };
       setMessages((prev) => [...prev, { user: 'SYSTEM', text: `${uName} JOINED THE SESSION`, time: '', isMe: false }]);
     });
 
-    newSocket.on('user-left', () => setUserCount((c) => Math.max(1, c - 1)));
+    newSocket.on('user-left', (socketId: string) => {
+      setUserCount((c) => Math.max(1, c - 1));
+      delete connectedUsersRef.current[socketId];
+      if (peersRef.current[socketId]) {
+        peersRef.current[socketId].close();
+        delete peersRef.current[socketId];
+        const audioEl = document.getElementById(`audio-${socketId}`);
+        if (audioEl) audioEl.remove();
+      }
+    });
 
     newSocket.on('object-remove', (id: string) => {
       setElements(prev => prev.filter(e => e.id !== id));
@@ -248,6 +262,41 @@ export default function Whiteboard({ roomId, username, onLeave }: WhiteboardProp
 
     newSocket.on("chat-message", (msg: any) => {
       setMessages(prev => [...prev, { ...msg, isMe: false }]);
+    });
+
+    // WebRTC Signaling
+    newSocket.on("webrtc-offer", async ({ socketId: senderId, offer }: any) => {
+      if (peersRef.current[senderId]) peersRef.current[senderId].close();
+      const stream = localStreamRef.current || new MediaStream();
+      const pc = new RTCPeerConnection({ iceServers: [{ urls: "stun:stun.l.google.com:19302" }] });
+      peersRef.current[senderId] = pc;
+      stream.getTracks().forEach(t => pc.addTrack(t, stream));
+      pc.onicecandidate = (e) => e.candidate && newSocket.emit("webrtc-candidate", { targetSocketId: senderId, candidate: e.candidate });
+      pc.ontrack = (e) => {
+        let audio = document.getElementById(`audio-${senderId}`) as HTMLAudioElement;
+        if (!audio) {
+          audio = document.createElement("audio");
+          audio.id = `audio-${senderId}`;
+          audio.autoplay = true;
+          document.body.appendChild(audio);
+        }
+        audio.srcObject = e.streams[0];
+      };
+      
+      await pc.setRemoteDescription(new RTCSessionDescription(offer));
+      const answer = await pc.createAnswer();
+      await pc.setLocalDescription(answer);
+      newSocket.emit("webrtc-answer", { targetSocketId: senderId, answer });
+    });
+
+    newSocket.on("webrtc-answer", async ({ socketId: senderId, answer }: any) => {
+      const pc = peersRef.current[senderId];
+      if (pc) await pc.setRemoteDescription(new RTCSessionDescription(answer)).catch(console.error);
+    });
+
+    newSocket.on("webrtc-candidate", async ({ socketId: senderId, candidate }: any) => {
+      const pc = peersRef.current[senderId];
+      if (pc) await pc.addIceCandidate(new RTCIceCandidate(candidate)).catch(console.error);
     });
 
     newSocket.on('voice-cc', ({ socketId, username, text }: any) => {
@@ -508,12 +557,12 @@ export default function Whiteboard({ roomId, username, onLeave }: WhiteboardProp
   };
 
   const updateWidget = (id: string, newProps: any) => {
-    setElements(prev => {
-      const items = prev.map(e => e.id === id ? { ...e, ...newProps } : e);
-      const updated = items.find(e => e.id === id);
-      if (updated) syncModify(updated);
-      return items;
-    });
+    const existing = elements.find(e => e.id === id);
+    if (existing) {
+      const updated = { ...existing, ...newProps };
+      syncModify(updated);
+    }
+    setElements(prev => prev.map(e => e.id === id ? { ...e, ...newProps } : e));
   };
 
   const deleteElement = (id: string) => {
@@ -533,45 +582,89 @@ export default function Whiteboard({ roomId, username, onLeave }: WhiteboardProp
 
 
   // Voice Setup 
-  const toggleVoice = async () => { /* Kept mostly same as original, snipped logic for brevity but ensuring it's not broken */
+  const toggleVoice = async () => { 
     if (isInVoice) {
       setIsInVoice(false);
       socket?.emit("voice-status", { roomId, isSpeaking: false });
       if (recognitionRef.current) {
         try { recognitionRef.current.stop(); } catch (e) { }
       }
+      if (localStreamRef.current) {
+        localStreamRef.current.getTracks().forEach(t => t.stop());
+        localStreamRef.current = null;
+      }
+      Object.keys(peersRef.current).forEach(id => {
+        peersRef.current[id].close();
+        const audioEl = document.getElementById(`audio-${id}`);
+        if (audioEl) audioEl.remove();
+      });
+      peersRef.current = {};
     } else {
       const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-      if (!SpeechRecognition) return showAlert("Live Captions are not supported in this browser. Please use Google Chrome.");
 
       try {
-        const recognition = new SpeechRecognition();
-        recognition.continuous = true; recognition.interimResults = true; recognition.lang = 'en-US';
-        recognition.onstart = () => setIsInVoice(true);
-        recognition.onspeechstart = () => socket?.emit("voice-status", { roomId, isSpeaking: true });
-        recognition.onspeechend = () => socket?.emit("voice-status", { roomId, isSpeaking: false });
-        recognition.onend = () => {
-          if (isInVoiceRef.current) {
-            try { recognition.start(); } catch (e) { }
-          } else {
-            socket?.emit("voice-status", { roomId, isSpeaking: false });
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+        localStreamRef.current = stream;
+        
+        Object.keys(connectedUsersRef.current).forEach(async (id) => {
+          if (id === socket?.id) return;
+          if (socket) {
+            const pc = new RTCPeerConnection({ iceServers: [{ urls: "stun:stun.l.google.com:19302" }] });
+            peersRef.current[id] = pc;
+            stream.getTracks().forEach(t => pc.addTrack(t, stream));
+            pc.onicecandidate = (e) => e.candidate && socket.emit("webrtc-candidate", { targetSocketId: id, candidate: e.candidate });
+            pc.ontrack = (e) => {
+              let audio = document.getElementById(`audio-${id}`) as HTMLAudioElement;
+              if (!audio) {
+                audio = document.createElement("audio");
+                audio.id = `audio-${id}`;
+                audio.autoplay = true;
+                document.body.appendChild(audio);
+              }
+              audio.srcObject = e.streams[0];
+            };
+            const offer = await pc.createOffer();
+            await pc.setLocalDescription(offer);
+            socket.emit("webrtc-offer", { targetSocketId: id, offer, username });
           }
-        };
-        recognition.onresult = (event: any) => {
-          let finalTranscript = '';
-          for (let i = event.resultIndex; i < event.results.length; ++i) {
-            if (event.results[i].isFinal) finalTranscript += event.results[i][0].transcript;
-          }
-          if (finalTranscript.trim()) {
-            socket?.emit("voice-cc", { roomId, text: finalTranscript });
-            setCcText(prev => ({ ...prev, 'me': { username: 'You', text: finalTranscript } }));
-          }
-        };
-        showAlert("Voice Chat Requested. Connecting to Mic...");
-        recognition.start();
-        recognitionRef.current = recognition;
+        });
+        showAlert("Live audio & CC connected!");
       } catch (err) {
-        showAlert("Failed to initialize Live Captions.");
+        console.error(err);
+        showAlert("Live audio denied. CC only enabled.");
+      }
+
+      if (SpeechRecognition) {
+        try {
+          const recognition = new SpeechRecognition();
+          recognition.continuous = true; recognition.interimResults = true; recognition.lang = 'en-US';
+          recognition.onstart = () => setIsInVoice(true);
+          recognition.onspeechstart = () => socket?.emit("voice-status", { roomId, isSpeaking: true });
+          recognition.onspeechend = () => socket?.emit("voice-status", { roomId, isSpeaking: false });
+          recognition.onend = () => {
+            if (isInVoiceRef.current) {
+              try { recognition.start(); } catch (e) { }
+            } else {
+              socket?.emit("voice-status", { roomId, isSpeaking: false });
+            }
+          };
+          recognition.onresult = (event: any) => {
+            let finalTranscript = '';
+            for (let i = event.resultIndex; i < event.results.length; ++i) {
+              if (event.results[i].isFinal) finalTranscript += event.results[i][0].transcript;
+            }
+            if (finalTranscript.trim()) {
+              socket?.emit("voice-cc", { roomId, text: finalTranscript });
+              setCcText(prev => ({ ...prev, 'me': { username: 'You', text: finalTranscript } }));
+            }
+          };
+          recognition.start();
+          recognitionRef.current = recognition;
+        } catch (err) {
+          console.error(err);
+        }
+      } else {
+        setIsInVoice(true);
       }
     }
   };
@@ -746,7 +839,7 @@ export default function Whiteboard({ roomId, username, onLeave }: WhiteboardProp
               <span className="text-[0.6rem] font-bold text-emerald-600 uppercase">Voice: {activeSpeaker ? activeSpeaker.username : username} speaking...</span>
             </div>
           )}
-          {isInVoice && Object.keys(ccText).map(id => (
+          {Object.keys(ccText).length > 0 && Object.keys(ccText).map(id => (
             <div key={id} className="absolute bottom-24 right-4 z-40 bg-slate-900/95 text-white p-2.5 rounded-xl text-sm">
               <span className="font-bold text-indigo-400 text-[0.6rem] uppercase tracking-widest block mb-1">{ccText[id].username}</span>
               {ccText[id].text}

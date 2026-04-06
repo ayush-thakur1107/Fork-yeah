@@ -250,6 +250,21 @@ io.on("connection", (socket) => {
   });
 
   // =======================
+  // WebRTC AUDIO
+  // =======================
+  socket.on("webrtc-offer", ({ targetSocketId, offer, username }) => {
+    socket.to(targetSocketId).emit("webrtc-offer", { socketId: socket.id, offer, username });
+  });
+  
+  socket.on("webrtc-answer", ({ targetSocketId, answer }) => {
+    socket.to(targetSocketId).emit("webrtc-answer", { socketId: socket.id, answer });
+  });
+
+  socket.on("webrtc-candidate", ({ targetSocketId, candidate }) => {
+    socket.to(targetSocketId).emit("webrtc-candidate", { socketId: socket.id, candidate });
+  });
+
+  // =======================
   // DISCONNECT
   // =======================
   socket.on("disconnect", () => {

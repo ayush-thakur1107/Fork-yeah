@@ -100,7 +100,17 @@ export default function PollWidget({ id, x, y, width, height, pollData, scale, c
                 className="border border-slate-200 rounded px-2 py-1 text-sm font-semibold text-slate-800 focus:outline-indigo-500"
                 placeholder="Ask a question..."
                 value={tempQuestion}
-                onChange={e => setTempQuestion(e.target.value)}
+                onChange={e => {
+                  setTempQuestion(e.target.value);
+                  onUpdate(id, {
+                    pollData: {
+                      ...pollData,
+                      question: e.target.value,
+                      options: tempOptions.map(t => ({ text: t, votes: 0 })),
+                      votedBy: []
+                    }
+                  });
+                }}
               />
               {tempOptions.map((opt, i) => (
                 <div key={i} className="flex gap-2">
@@ -112,6 +122,14 @@ export default function PollWidget({ id, x, y, width, height, pollData, scale, c
                       const newOpts = [...tempOptions];
                       newOpts[i] = e.target.value;
                       setTempOptions(newOpts);
+                      onUpdate(id, {
+                        pollData: {
+                          ...pollData,
+                          question: tempQuestion,
+                          options: newOpts.map(t => ({ text: t, votes: 0 })),
+                          votedBy: []
+                        }
+                      });
                     }}
                   />
                   {tempOptions.length > 2 && (
