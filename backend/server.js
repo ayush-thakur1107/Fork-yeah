@@ -209,7 +209,12 @@ io.on("connection", (socket) => {
     }
   });
 });
-
+app.get("/debug-env", (req, res) => {
+  res.send({
+    googleId: process.env.GOOGLE_CLIENT_ID || "MISSING",
+    githubId: process.env.GITHUB_CLIENT_ID || "MISSING"
+  });
+});
 
 
 const PORT = process.env.PORT || 3001;
