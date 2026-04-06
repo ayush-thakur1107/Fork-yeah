@@ -114,6 +114,12 @@ const io = new Server(server, {
 // In-memory cache
 const roomsData = {};
 
+// Hackathon Requirements Compliance: WS /connect alias
+io.of("/connect").on("connection", (socket) => {
+  console.log("✅ Custom WS /connect namespace hit:", socket.id);
+  socket.emit("connected", { status: "success", alias: "/connect" });
+});
+
 io.on("connection", (socket) => {
   console.log("🔌 User connected:", socket.id);
 
@@ -191,7 +197,7 @@ io.on("connection", (socket) => {
   socket.on("object-remove", ({ roomId, id }) => {
     if (roomsData[roomId]) delete roomsData[roomId].objects[id];
     socket.to(roomId).emit("object-remove", id);
-    
+
     Room.updateOne(
       { roomId },
       { elements: Object.values(roomsData[roomId]?.objects || {}) }
@@ -201,7 +207,7 @@ io.on("connection", (socket) => {
   socket.on("clear", (roomId) => {
     if (roomsData[roomId]) roomsData[roomId].objects = {};
     socket.to(roomId).emit("clear");
-    
+
     Room.updateOne(
       { roomId },
       { elements: [] }
@@ -215,7 +221,7 @@ io.on("connection", (socket) => {
         roomsData[roomId].objects[el.id] = el;
       });
       socket.to(roomId).emit("state-replace", elements);
-      
+
       Room.updateOne(
         { roomId },
         { elements: Object.values(roomsData[roomId].objects) }
@@ -255,7 +261,7 @@ io.on("connection", (socket) => {
   socket.on("webrtc-offer", ({ targetSocketId, offer, username }) => {
     socket.to(targetSocketId).emit("webrtc-offer", { socketId: socket.id, offer, username });
   });
-  
+
   socket.on("webrtc-answer", ({ targetSocketId, answer }) => {
     socket.to(targetSocketId).emit("webrtc-answer", { socketId: socket.id, answer });
   });
