@@ -5,7 +5,7 @@ const cors = require("cors");
 const path = require("path");
 require("dotenv").config();
 
-// ✅ NEW IMPORTS (TOP)
+// ✅ NEW IMPORTS
 const passport = require("passport");
 const GoogleStrategy = require("passport-google-oauth20").Strategy;
 const GitHubStrategy = require("passport-github2").Strategy;
@@ -13,39 +13,28 @@ const session = require("express-session");
 
 const app = express();
 
-// ✅ FIX CORS (important for login)
+// ✅ FIX CORS (Updated to your live Vercel URL)
 app.use(cors({
-  origin: "http://localhost:5173", // Remember to change this to your Vercel URL later!
+  origin: "https://fork-yeah-three.vercel.app",
   credentials: true
 }));
 
 // ✅ SESSION
 app.use(session({
-  // Added a fallback string so Render won't crash if the env variable is missing!
   secret: process.env.SESSION_SECRET || "super_secret_hackathon_fallback_key",
   resave: false,
   saveUninitialized: false
 }));
 
-// ✅ PASSPORT
+// ✅ PASSPORT INITIALIZATION
 app.use(passport.initialize());
 app.use(passport.session());
 
-passport.serializeUser((user, done) => done(null, user));
-passport.deserializeUser((user, done) => done(null, user));
-
-
-/* ====================================================================
-   🛑 OAUTH STRATEGIES & ROUTES COMMENTED OUT FOR DEPLOYMENT
-   (Uncomment this entire block ONLY after you add the Client IDs and 
-    Secrets to your Render Environment Variables!)
-   ==================================================================== */
-/*
 // ✅ GOOGLE STRATEGY
 passport.use(new GoogleStrategy({
   clientID: process.env.GOOGLE_CLIENT_ID,
   clientSecret: process.env.GOOGLE_CLIENT_SECRET,
-  callbackURL: "http://localhost:3001/auth/google/callback"
+  callbackURL: "https://fork-yeah-backend.onrender.com/auth/google/callback"
 },
   (accessToken, refreshToken, profile, done) => {
     return done(null, profile);
@@ -55,55 +44,66 @@ passport.use(new GoogleStrategy({
 passport.use(new GitHubStrategy({
   clientID: process.env.GITHUB_CLIENT_ID,
   clientSecret: process.env.GITHUB_CLIENT_SECRET,
-  callbackURL: "http://localhost:3001/auth/github/callback"
+  callbackURL: "https://fork-yeah-backend.onrender.com/auth/github/callback"
 },
   (accessToken, refreshToken, profile, done) => {
     return done(null, profile);
   }));
 
-// ✅ AUTH ROUTES
+passport.serializeUser((user, done) => done(null, user));
+passport.deserializeUser((user, done) => done(null, user));
+
+
+// ====================================================================
+// ✅ AUTH ROUTES (Redirecting back to Vercel upon success)
+// ====================================================================
+
 app.get("/auth/google",
   passport.authenticate("google", { scope: ["profile", "email"] })
 );
 
 app.get("/auth/google/callback",
   passport.authenticate("google", {
-    successRedirect: "http://localhost:5173",
-    failureRedirect: "/"
+    successRedirect: "https://fork-yeah-three.vercel.app",
+    failureRedirect: "https://fork-yeah-three.vercel.app"
   })
 );
 
 app.get("/auth/github",
-  passport.authenticate("github", { scope: [ 'user:email' ] })
+  passport.authenticate("github", { scope: ['user:email'] })
 );
 
 app.get("/auth/github/callback",
   passport.authenticate("github", {
-    successRedirect: "http://localhost:5173",
-    failureRedirect: "/"
+    successRedirect: "https://fork-yeah-three.vercel.app",
+    failureRedirect: "https://fork-yeah-three.vercel.app"
   })
 );
 
 app.get("/auth/logout", (req, res, next) => {
   req.logout((err) => {
     if (err) { return next(err); }
-    res.redirect("http://localhost:5173");
+    res.redirect("https://fork-yeah-three.vercel.app");
   });
 });
-*/
-// ====================================================================
 
-
-// ✅ USER ROUTE
+// ✅ USER ROUTE (For the frontend to check if someone is logged in)
 app.get("/user", (req, res) => {
   res.send(req.user || null);
 });
 
-// ================= SOCKET.IO =================
+
+// ====================================================================
+// ================= SOCKET.IO MULTIPLAYER LOGIC ======================
+// ====================================================================
 
 const server = http.createServer(app);
 const io = new Server(server, {
-  cors: { origin: "*", methods: ["GET", "POST"] }
+  cors: {
+    origin: "https://fork-yeah-three.vercel.app",
+    methods: ["GET", "POST"],
+    credentials: true
+  }
 });
 
 const roomsData = {};
@@ -205,8 +205,8 @@ io.on("connection", (socket) => {
   });
 });
 
+// Static files fallback (Just in case)
 app.use(express.static(path.join(__dirname, "../frontend/dist")));
-
 app.use((req, res) => {
   res.sendFile(path.join(__dirname, "../frontend/dist/index.html"));
 });
