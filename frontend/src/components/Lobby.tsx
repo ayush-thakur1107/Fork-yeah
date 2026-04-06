@@ -51,12 +51,12 @@ export default function Lobby({ onJoin }: LobbyProps) {
 
   return (
     <div className="w-full h-full min-h-screen bg-[#0f172a] bg-gradient-to-br from-[#0f172a] via-[#1e1b4b] to-[#0f172a] flex text-slate-100 overflow-hidden relative">
-      
+
       {/* Animated Neon Glowing Entities */}
       <div className="absolute inset-0 overflow-hidden pointer-events-none opacity-40 z-0">
-         <div className="absolute top-[30%] left-[-20%] w-[150%] h-[3px] bg-gradient-to-r from-transparent via-cyan-400 to-transparent blur-[4px] glow-float-1 rotate-12"></div>
-         <div className="absolute top-[70%] left-[-10%] w-[120%] h-[4px] bg-gradient-to-r from-transparent via-[#4f46e5] to-transparent blur-[5px] glow-float-2 -rotate-[8deg]"></div>
-         <div className="absolute top-[80%] left-[-30%] w-[140%] h-[3px] bg-gradient-to-r from-transparent via-fuchsia-400 to-transparent blur-[4px] glow-float-3 rotate-[24deg]"></div>
+        <div className="absolute top-[30%] left-[-20%] w-[150%] h-[3px] bg-gradient-to-r from-transparent via-cyan-400 to-transparent blur-[4px] glow-float-1 rotate-12"></div>
+        <div className="absolute top-[70%] left-[-10%] w-[120%] h-[4px] bg-gradient-to-r from-transparent via-[#4f46e5] to-transparent blur-[5px] glow-float-2 -rotate-[8deg]"></div>
+        <div className="absolute top-[80%] left-[-30%] w-[140%] h-[3px] bg-gradient-to-r from-transparent via-fuchsia-400 to-transparent blur-[4px] glow-float-3 rotate-[24deg]"></div>
       </div>
       <style>{`
         @keyframes flowRight {
@@ -80,7 +80,7 @@ export default function Lobby({ onJoin }: LobbyProps) {
       `}</style>
 
       <div className="w-full max-w-7xl mx-auto flex flex-col lg:flex-row items-center justify-center px-6 py-12 lg:py-20 lg:px-12 gap-12 lg:gap-24 relative z-10">
-        
+
         {/* Left Side: Hero Text & Features */}
         <div className="flex-1 w-full max-w-xl self-center pt-8 lg:pt-0">
           <div className="flex items-center gap-2 text-[#4f46e5] font-bold text-2xl mb-8">
@@ -141,7 +141,7 @@ export default function Lobby({ onJoin }: LobbyProps) {
                   placeholder="e.g. Alex"
                 />
               </div>
-              
+
               <div>
                 <label className="block text-[0.8rem] font-bold text-slate-300 mb-2">Room ID</label>
                 <input
@@ -153,7 +153,7 @@ export default function Lobby({ onJoin }: LobbyProps) {
                 />
               </div>
 
-              <button 
+              <button
                 type="submit"
                 disabled={loading}
                 className="w-full bg-[#4f46e5] hover:bg-[#4338ca] text-white font-semibold py-3.5 px-4 rounded-xl transition-all shadow-[0_8px_20px_rgba(79,70,229,0.25)] hover:shadow-[0_8px_20px_rgba(79,70,229,0.4)] text-[0.95rem] disabled:opacity-50"
@@ -171,7 +171,7 @@ export default function Lobby({ onJoin }: LobbyProps) {
       {/* Footer / Bottom Elements */}
       <div className="absolute bottom-6 left-0 right-0 max-w-7xl mx-auto px-12 flex justify-center items-center z-10 pointer-events-none">
         <div className="hidden lg:flex gap-8 text-[0.7rem] font-bold tracking-widest text-slate-500 pointer-events-auto">
-          <div className="uppercase">Hackathon Project Demo</div>
+          <div className="uppercase">made with ❤️ by Team Fork-yeah</div>
         </div>
       </div>
     </div>
