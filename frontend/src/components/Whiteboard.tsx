@@ -186,6 +186,7 @@ export default function Whiteboard({ roomId, username, onLeave }: WhiteboardProp
 
     newSocket.on('connect', () => {
       newSocket.emit('join-room', { roomId, username });
+      newSocket.emit('request-board-state', roomId);
     });
 
     newSocket.on('load-state', (state: { objects: any[], chats: ChatMessage[], users: any }) => {
@@ -205,20 +206,23 @@ export default function Whiteboard({ roomId, username, onLeave }: WhiteboardProp
       }
     });
 
+    newSocket.on('receive-update', (updatedElement: BoardElement) => {
+      setElements(prev => {
+        const exists = prev.some(e => e.id === updatedElement.id);
+        if (exists) {
+          return prev.map(e => e.id === updatedElement.id ? { ...e, ...updatedElement } : e);
+        } else {
+          return [...prev, updatedElement];
+        }
+      });
+    });
+
     newSocket.on('user-joined', ({ username: uName }) => {
       setUserCount((c) => c + 1);
       setMessages((prev) => [...prev, { user: 'SYSTEM', text: `${uName} JOINED THE SESSION`, time: '', isMe: false }]);
     });
     
     newSocket.on('user-left', () => setUserCount((c) => Math.max(1, c - 1)));
-
-    newSocket.on('object-add', (objData: BoardElement) => {
-      setElements(prev => [...prev.filter(e => e.id !== objData.id), objData]);
-    });
-
-    newSocket.on('object-modify', (objData: BoardElement) => {
-       setElements(prev => prev.map(e => e.id === objData.id ? { ...e, ...objData } : e));
-    });
 
     newSocket.on('object-remove', (id: string) => {
       setElements(prev => prev.filter(e => e.id !== id));
@@ -257,12 +261,35 @@ export default function Whiteboard({ roomId, username, onLeave }: WhiteboardProp
   }, [roomId, username, backendUrl]);
 
   // ========== Sync Helper ==========
-  const syncAdd = (obj: BoardElement) => {
-    socket?.emit('object-add', { roomId, obj });
+  const throttledEmitRef = useRef(
+    (() => {
+      let lastCall = 0;
+      let timeout: ReturnType<typeof setTimeout> | null = null;
+      return (sckt: Socket, rId: string, element: BoardElement) => {
+        const now = Date.now();
+        const limit = 30; // 30ms throttling limit
+
+        if (timeout) clearTimeout(timeout);
+
+        if (now - lastCall >= limit) {
+          sckt.emit('draw-update', { roomId: rId, element });
+          lastCall = now;
+        } else {
+          timeout = setTimeout(() => {
+            sckt.emit('draw-update', { roomId: rId, element });
+            lastCall = Date.now();
+          }, limit - (now - lastCall));
+        }
+      };
+    })()
+  );
+
+  const syncUpdate = (obj: BoardElement) => {
+    if (socket) throttledEmitRef.current(socket, roomId, obj);
   };
-  const syncModify = (obj: BoardElement) => {
-    socket?.emit('object-modify', { roomId, obj });
-  };
+
+  const syncAdd = (obj: BoardElement) => syncUpdate(obj);
+  const syncModify = (obj: BoardElement) => syncUpdate(obj);
 
   // ========== Drawing Logic ==========
   const handlePointerDown = (e: any) => {
@@ -350,6 +377,9 @@ export default function Whiteboard({ roomId, username, onLeave }: WhiteboardProp
         const dy = currentY - el.y;
         el.radius = Math.sqrt(dx * dx + dy * dy);
       }
+
+      // Emitting optimistic update while drawing/resizing
+      syncUpdate(el);
       return el;
     });
   };
