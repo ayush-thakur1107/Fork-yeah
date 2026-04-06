@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Rnd } from 'react-rnd';
 import { BarChart, Bar, PieChart, Pie, Cell, Tooltip, ResponsiveContainer, XAxis, YAxis } from 'recharts';
 
@@ -29,6 +29,12 @@ export default function GraphWidget({ id, x, y, width, height, graphData, scale,
     graphData.dataPoints.map(d => `${d.name}:${d.value}`).join(', ')
   );
   const [tempType, setTempType] = useState<'bar' | 'pie'>(graphData.type);
+
+  useEffect(() => {
+    if (graphData.dataPoints.length > 0) {
+      setIsEditing(false);
+    }
+  }, [graphData.dataPoints, graphData.title, graphData.type]);
 
   const startDragging = (e: any) => {
     e.stopPropagation();
@@ -72,7 +78,7 @@ export default function GraphWidget({ id, x, y, width, height, graphData, scale,
       enableResizing={true}
       scale={scale}
       cancel=".nodrag"
-      className="absolute z-30"
+      className="absolute z-30 pointer-events-auto"
       onMouseDown={startDragging}
       onTouchStart={startDragging}
     >

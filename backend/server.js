@@ -224,14 +224,29 @@ io.on("connection", (socket) => {
   });
 
   // =======================
-  // CHAT
+  // CHAT & VOICE
   // =======================
   socket.on("chat-message", ({ roomId, message }) => {
     if (roomsData[roomId]) {
       roomsData[roomId].chats.push(message);
     }
-
     socket.to(roomId).emit("chat-message", message);
+  });
+
+  socket.on("voice-status", ({ roomId, isSpeaking }) => {
+    socket.to(roomId).emit("voice-status", {
+      socketId: socket.id,
+      isSpeaking,
+      username: socket.username
+    });
+  });
+
+  socket.on("voice-cc", ({ roomId, text }) => {
+    socket.to(roomId).emit("voice-cc", {
+      socketId: socket.id,
+      username: socket.username,
+      text
+    });
   });
 
   // =======================

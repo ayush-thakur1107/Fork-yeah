@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Rnd } from 'react-rnd';
 
 export interface PollData {
@@ -26,6 +26,12 @@ export default function PollWidget({ id, x, y, width, height, pollData, scale, c
   const [tempOptions, setTempOptions] = useState<string[]>(
     pollData.options.length ? pollData.options.map(o => o.text) : ['', '']
   );
+
+  useEffect(() => {
+    if (pollData.question) {
+      setIsEditing(false);
+    }
+  }, [pollData.question, pollData.votedBy]);
 
   const startDragging = (e: any) => {
     e.stopPropagation();
@@ -77,7 +83,7 @@ export default function PollWidget({ id, x, y, width, height, pollData, scale, c
       enableResizing={true}
       scale={scale}
       cancel=".nodrag"
-      className="absolute z-30"
+      className="absolute z-30 pointer-events-auto"
       onMouseDown={startDragging}
       onTouchStart={startDragging}
     >
