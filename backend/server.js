@@ -7,9 +7,9 @@ require("dotenv").config();
 
 const app = express();
 
-// =======================
+// =====================================================
 // CORS CONFIGURATION
-// =======================
+// =====================================================
 
 const allowedOrigins = [
   "https://fork-yeah-three.vercel.app",
@@ -19,7 +19,7 @@ const allowedOrigins = [
 
 const corsOptions = {
   origin: function (origin, callback) {
-    // Allow requests without an origin (Postman, server-to-server, etc.)
+    // Allow requests without an Origin header
     if (!origin) {
       return callback(null, true);
     }
@@ -31,18 +31,29 @@ const corsOptions = {
     console.log("❌ Blocked CORS origin:", origin);
     return callback(new Error("Not allowed by CORS"));
   },
+
   methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
   credentials: true
 };
 
 app.use(cors(corsOptions));
-app.options("*", cors(corsOptions));
-
 app.use(express.json());
 
-// =======================
+// =====================================================
+// BASIC HEALTH CHECK
+// =====================================================
+
+app.get("/", (req, res) => {
+  res.json({
+    status: "online",
+    service: "LiveCollab Backend",
+    message: "Server is running 🚀"
+  });
+});
+
+// =====================================================
 // MONGODB CONNECTION
-// =======================
+// =====================================================
 
 const MONGO_URI = process.env.MONGO_URI;
 
@@ -51,18 +62,21 @@ if (!MONGO_URI) {
   process.exit(1);
 }
 
-mongoose.connect(MONGO_URI, {
-  serverSelectionTimeoutMS: 5000
-})
-  .then(() => console.log("🟢 MongoDB Connected"))
-  .catch(err => {
+mongoose
+  .connect(MONGO_URI, {
+    serverSelectionTimeoutMS: 5000
+  })
+  .then(() => {
+    console.log("🟢 MongoDB Connected");
+  })
+  .catch((err) => {
     console.error("🔴 MongoDB Error:", err);
     process.exit(1);
   });
 
-// =======================
+// =====================================================
 // MODELS
-// =======================
+// =====================================================
 
 const User = mongoose.model(
   "User",
@@ -83,6 +97,7 @@ const Room = mongoose.model(
       required: true,
       unique: true
     },
+
     elements: {
       type: Array,
       default: []
@@ -90,11 +105,14 @@ const Room = mongoose.model(
   })
 );
 
-// =======================
-// ROUTES
-// =======================
+// =====================================================
+// REST API ROUTES
+// =====================================================
 
+// -----------------------
 // LOGIN
+// -----------------------
+
 app.post("/api/login", async (req, res) => {
   try {
     const { username } = req.body;
@@ -108,7 +126,9 @@ app.post("/api/login", async (req, res) => {
     let user = await User.findOne({ username });
 
     if (!user) {
-      user = await User.create({ username });
+      user = await User.create({
+        username
+      });
     }
 
     res.json({
@@ -117,7 +137,7 @@ app.post("/api/login", async (req, res) => {
     });
 
   } catch (err) {
-    console.error("LOGIN ERROR:", err);
+    console.error("❌ LOGIN ERROR:", err);
 
     res.status(500).json({
       error: "Server error"
@@ -125,14 +145,19 @@ app.post("/api/login", async (req, res) => {
   }
 });
 
+// -----------------------
 // CREATE / JOIN ROOM
+// -----------------------
+
 app.post("/room", async (req, res) => {
   try {
     const roomId =
       req.body.roomId ||
       "room-" + Math.random().toString(36).slice(2, 8);
 
-    let room = await Room.findOne({ roomId });
+    let room = await Room.findOne({
+      roomId
+    });
 
     if (!room) {
       room = await Room.create({
@@ -141,10 +166,12 @@ app.post("/room", async (req, res) => {
       });
     }
 
-    res.json({ roomId });
+    res.json({
+      roomId
+    });
 
   } catch (err) {
-    console.error("ROOM ERROR:", err);
+    console.error("❌ ROOM ERROR:", err);
 
     res.status(500).json({
       error: "Room error"
@@ -152,11 +179,15 @@ app.post("/room", async (req, res) => {
   }
 });
 
-// =======================
-// SOCKET.IO SETUP
-// =======================
+// =====================================================
+// HTTP SERVER
+// =====================================================
 
 const server = http.createServer(app);
+
+// =====================================================
+// SOCKET.IO
+// =====================================================
 
 const io = new Server(server, {
   cors: {
@@ -166,15 +197,15 @@ const io = new Server(server, {
   }
 });
 
-// =======================
+// =====================================================
 // IN-MEMORY ROOM CACHE
-// =======================
+// =====================================================
 
 const roomsData = {};
 
-// =======================
+// =====================================================
 // CUSTOM /connect NAMESPACE
-// =======================
+// =====================================================
 
 io.of("/connect").on("connection", (socket) => {
   console.log(
@@ -188,87 +219,106 @@ io.of("/connect").on("connection", (socket) => {
   });
 });
 
-// =======================
+// =====================================================
 // MAIN SOCKET CONNECTION
-// =======================
+// =====================================================
 
 io.on("connection", (socket) => {
 
-  console.log("🔌 User connected:", socket.id);
+  console.log(
+    "🔌 User connected:",
+    socket.id
+  );
 
-  // =======================
+  // ===================================================
   // JOIN ROOM
-  // =======================
+  // ===================================================
 
-  socket.on("join-room", async ({ roomId, username }) => {
+  socket.on(
+    "join-room",
+    async ({ roomId, username }) => {
 
-    try {
+      try {
 
-      socket.join(roomId);
+        socket.join(roomId);
 
-      socket.roomId = roomId;
-      socket.username = username;
+        socket.roomId = roomId;
+        socket.username = username;
 
-      if (!roomsData[roomId]) {
+        // Create room cache if it doesn't exist
+        if (!roomsData[roomId]) {
 
-        let dbRoom = await Room.findOne({ roomId });
-
-        if (!dbRoom) {
-          dbRoom = await Room.create({
-            roomId,
-            elements: []
+          let dbRoom = await Room.findOne({
+            roomId
           });
+
+          if (!dbRoom) {
+
+            dbRoom = await Room.create({
+              roomId,
+              elements: []
+            });
+
+          }
+
+          const map = {};
+
+          dbRoom.elements.forEach((el) => {
+            map[el.id] = el;
+          });
+
+          roomsData[roomId] = {
+            objects: map,
+            users: {},
+            chats: []
+          };
         }
 
-        const map = {};
+        // Add user
+        roomsData[roomId].users[socket.id] = {
+          username
+        };
 
-        dbRoom.elements.forEach(el => {
-          map[el.id] = el;
+        // Send existing state to new user
+        socket.emit("load-state", {
+          objects: Object.values(
+            roomsData[roomId].objects
+          ),
+
+          users:
+            roomsData[roomId].users,
+
+          chats:
+            roomsData[roomId].chats
         });
 
-        roomsData[roomId] = {
-          objects: map,
-          users: {},
-          chats: []
-        };
+        // Notify other users
+        socket.to(roomId).emit(
+          "user-joined",
+          {
+            socketId: socket.id,
+            username
+          }
+        );
+
+        console.log(
+          `👤 ${username} joined room ${roomId}`
+        );
+
+      } catch (err) {
+
+        console.error(
+          "❌ JOIN ROOM ERROR:",
+          err
+        );
+
       }
-
-      roomsData[roomId].users[socket.id] = {
-        username
-      };
-
-      // Send current state to new user
-      socket.emit("load-state", {
-        objects: Object.values(
-          roomsData[roomId].objects
-        ),
-        users: roomsData[roomId].users,
-        chats: roomsData[roomId].chats
-      });
-
-      // Notify existing users
-      socket.to(roomId).emit("user-joined", {
-        socketId: socket.id,
-        username
-      });
-
-      console.log(
-        `👤 ${username} joined room ${roomId}`
-      );
-
-    } catch (err) {
-
-      console.error(
-        "JOIN ROOM ERROR:",
-        err
-      );
-
     }
-  });
+  );
 
-  // =======================
+  // ===================================================
   // CURSOR SYNC
-  // =======================
+  // ===================================================
 
   socket.on(
     "cursor-move",
@@ -287,24 +337,28 @@ io.on("connection", (socket) => {
     }
   );
 
-  // =======================
+  // ===================================================
   // DRAW UPDATE
-  // =======================
+  // ===================================================
 
   socket.on(
     "draw-update",
     ({ roomId, element }) => {
 
-      if (!roomsData[roomId]) return;
+      if (!roomsData[roomId]) {
+        return;
+      }
 
       roomsData[roomId].objects[element.id] =
         element;
 
+      // Send update to everyone except sender
       socket.to(roomId).emit(
         "receive-update",
         element
       );
 
+      // Persist to MongoDB
       Room.updateOne(
         { roomId },
         {
@@ -318,16 +372,18 @@ io.on("connection", (socket) => {
     }
   );
 
-  // =======================
+  // ===================================================
   // REMOVE OBJECT
-  // =======================
+  // ===================================================
 
   socket.on(
     "object-remove",
     ({ roomId, id }) => {
 
       if (roomsData[roomId]) {
+
         delete roomsData[roomId].objects[id];
+
       }
 
       socket.to(roomId).emit(
@@ -348,40 +404,53 @@ io.on("connection", (socket) => {
     }
   );
 
-  // =======================
+  // ===================================================
   // CLEAR CANVAS
-  // =======================
+  // ===================================================
 
-  socket.on("clear", (roomId) => {
+  socket.on(
+    "clear",
+    (roomId) => {
 
-    if (roomsData[roomId]) {
-      roomsData[roomId].objects = {};
+      if (roomsData[roomId]) {
+
+        roomsData[roomId].objects = {};
+
+      }
+
+      socket.to(roomId).emit(
+        "clear"
+      );
+
+      Room.updateOne(
+        { roomId },
+        {
+          elements: []
+        }
+      ).exec();
+
     }
+  );
 
-    socket.to(roomId).emit("clear");
-
-    Room.updateOne(
-      { roomId },
-      { elements: [] }
-    ).exec();
-
-  });
-
-  // =======================
+  // ===================================================
   // REPLACE STATE
-  // =======================
+  // ===================================================
 
   socket.on(
     "state-replace",
     ({ roomId, elements }) => {
 
-      if (!roomsData[roomId]) return;
+      if (!roomsData[roomId]) {
+        return;
+      }
 
       roomsData[roomId].objects = {};
 
-      elements.forEach(el => {
+      elements.forEach((el) => {
+
         roomsData[roomId].objects[el.id] =
           el;
+
       });
 
       socket.to(roomId).emit(
@@ -402,18 +471,20 @@ io.on("connection", (socket) => {
     }
   );
 
-  // =======================
+  // ===================================================
   // CHAT
-  // =======================
+  // ===================================================
 
   socket.on(
     "chat-message",
     ({ roomId, message }) => {
 
       if (roomsData[roomId]) {
+
         roomsData[roomId].chats.push(
           message
         );
+
       }
 
       socket.to(roomId).emit(
@@ -424,9 +495,9 @@ io.on("connection", (socket) => {
     }
   );
 
-  // =======================
+  // ===================================================
   // VOICE STATUS
-  // =======================
+  // ===================================================
 
   socket.on(
     "voice-status",
@@ -444,9 +515,9 @@ io.on("connection", (socket) => {
     }
   );
 
-  // =======================
+  // ===================================================
   // LIVE CAPTIONS
-  // =======================
+  // ===================================================
 
   socket.on(
     "voice-cc",
@@ -464,13 +535,17 @@ io.on("connection", (socket) => {
     }
   );
 
-  // =======================
-  // WEBRTC AUDIO
-  // =======================
+  // ===================================================
+  // WEBRTC OFFER
+  // ===================================================
 
   socket.on(
     "webrtc-offer",
-    ({ targetSocketId, offer, username }) => {
+    ({
+      targetSocketId,
+      offer,
+      username
+    }) => {
 
       socket.to(targetSocketId).emit(
         "webrtc-offer",
@@ -484,9 +559,16 @@ io.on("connection", (socket) => {
     }
   );
 
+  // ===================================================
+  // WEBRTC ANSWER
+  // ===================================================
+
   socket.on(
     "webrtc-answer",
-    ({ targetSocketId, answer }) => {
+    ({
+      targetSocketId,
+      answer
+    }) => {
 
       socket.to(targetSocketId).emit(
         "webrtc-answer",
@@ -499,9 +581,16 @@ io.on("connection", (socket) => {
     }
   );
 
+  // ===================================================
+  // WEBRTC ICE CANDIDATE
+  // ===================================================
+
   socket.on(
     "webrtc-candidate",
-    ({ targetSocketId, candidate }) => {
+    ({
+      targetSocketId,
+      candidate
+    }) => {
 
       socket.to(targetSocketId).emit(
         "webrtc-candidate",
@@ -514,42 +603,45 @@ io.on("connection", (socket) => {
     }
   );
 
-  // =======================
+  // ===================================================
   // DISCONNECT
-  // =======================
+  // ===================================================
 
-  socket.on("disconnect", () => {
+  socket.on(
+    "disconnect",
+    () => {
 
-    console.log(
-      "❌ User disconnected:",
-      socket.id
-    );
-
-    const roomId = socket.roomId;
-
-    if (
-      roomId &&
-      roomsData[roomId]
-    ) {
-
-      delete roomsData[roomId].users[
-        socket.id
-      ];
-
-      socket.to(roomId).emit(
-        "user-left",
+      console.log(
+        "❌ User disconnected:",
         socket.id
       );
 
-    }
+      const roomId =
+        socket.roomId;
 
-  });
+      if (
+        roomId &&
+        roomsData[roomId]
+      ) {
+
+        delete roomsData[roomId]
+          .users[socket.id];
+
+        socket.to(roomId).emit(
+          "user-left",
+          socket.id
+        );
+
+      }
+
+    }
+  );
 
 });
 
-// =======================
+// =====================================================
 // START SERVER
-// =======================
+// =====================================================
 
 const PORT =
   process.env.PORT || 3001;
@@ -560,7 +652,7 @@ server.listen(
   () => {
 
     console.log(
-      `🚀 Server running on port ${PORT}`
+      `🚀 LiveCollab backend running on port ${PORT}`
     );
 
   }
